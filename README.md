@@ -24,6 +24,11 @@ whole clock, it shapes the day:
 Only the clock slows down. Combat, physics, AI and animation run at normal
 speed.
 
+Nexus Mods page materials (description, summary, images, publishing checklist)
+are in [`nexus/`](nexus/PUBLISHING.md).
+
+![How fast time passes, hour by hour](nexus/images/time-of-day-curve.png)
+
 > **Status: untested in-game (v0.2.0).** The game logic is unit-tested, but the
 > hook has not been run in the game yet. It uses signatures that were confirmed
 > in game build **2.03.00**. If your build differs, the log says so. Single-player
@@ -39,8 +44,10 @@ speed.
 3. Start the game. `CrimsonDesertLongerDays.log` appears next to the `.asi` and
    should contain `Ready.`
 
-**Getting the files:** go to **Actions → Build → latest run → Artifacts** and
-download `CrimsonDesertLongerDays`, or see [Building](#building).
+**Getting the files:** download the zip from the
+[Releases](https://github.com/La2o/CrimsonDesert-LongerDays/releases) page (or
+the Nexus page, once it's up) and extract it into the Crimson Desert folder.
+Development builds are under **Actions → Build → latest run → Artifacts**.
 
 **Uninstall:** delete the `.asi` and `.ini`. Game files and saves are never
 touched.

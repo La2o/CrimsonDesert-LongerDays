@@ -2,6 +2,8 @@ name: Build
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -18,9 +20,26 @@ jobs:
         run: ctest --test-dir build-tests --output-on-failure
 
   mod:
+    needs: tests
     runs-on: windows-latest
+    permissions:
+      contents: write # to publish the GitHub Release on tags
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $h = Get-Content src/version.h -Raw
+          $v = '{0}.{1}.{2}' -f `
+            ([regex]::Match($h, 'VERSION_MAJOR (\d+)').Groups[1].Value),
+            ([regex]::Match($h, 'VERSION_MINOR (\d+)').Groups[1].Value),
+            ([regex]::Match($h, 'VERSION_PATCH (\d+)').Groups[1].Value)
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "Tag $env:GITHUB_REF_NAME does not match src/version.h ($v)"
+          }
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -28,15 +47,38 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      # Layout mirrors the game folder: players (and mod managers) extract the
+      # zip into the Crimson Desert install directory.
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force package/bin64 | Out-Null
+          $name = "CrimsonDesertLongerDays-${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Force "package/bin64" | Out-Null
           Copy-Item build/Release/CrimsonDesertLongerDays.asi package/bin64/
           Copy-Item CrimsonDesertLongerDays.ini package/bin64/
-          Copy-Item README.md package/
+          Copy-Item LICENSE package/bin64/CrimsonDesertLongerDays-LICENSE.txt
+          Compress-Archive -Path package/* -DestinationPath "$name.zip"
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+          Get-Content "$name.zip.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CrimsonDesertLongerDays
-          path: package/
+          name: CrimsonDesertLongerDays-${{ steps.version.outputs.version }}
+          path: |
+            CrimsonDesertLongerDays-*.zip
+            CrimsonDesertLongerDays-*.zip.sha256
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          # Release notes = this version's section of CHANGELOG.md.
+          $log = Get-Content CHANGELOG.md -Raw
+          $m = [regex]::Match($log, "(?ms)^## \[?$([regex]::Escape($v))\]?[^\n]*\n(.*?)(?=^## |\z)")
+          $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "See CHANGELOG.md" }
+          $notes | Out-File -Encoding utf8 notes.md
+          gh release create "v$v" "CrimsonDesertLongerDays-$v.zip" "CrimsonDesertLongerDays-$v.zip.sha256" `
+            --title "Longer Days $v" --notes-file notes.md

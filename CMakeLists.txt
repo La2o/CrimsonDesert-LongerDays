@@ -21,6 +21,8 @@ if(NOT WIN32)
                         "On other hosts, configure with -DLONGERDAYS_TESTS=ON to run the tests.")
 endif()
 
+enable_language(RC)
+
 # Static CRT so players don't need the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
@@ -40,6 +42,7 @@ add_library(CrimsonDesertLongerDays SHARED
     src/config.cpp
     src/scanner.cpp
     src/log.cpp
+    src/version.rc
 )
 target_link_libraries(CrimsonDesertLongerDays PRIVATE minhook)
 target_compile_definitions(CrimsonDesertLongerDays PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)

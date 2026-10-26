@@ -1,0 +1,1 @@
+Longer, more natural days. Daytime lasts 2x as long by default, dawn and dusk ease in smoothly, sunrise and sunset linger, and the sun stays in sync. Set day and night separately, in multipliers or real minutes, with optional seasons. Edit the INI live, F8 toggles. Only the clock slows: combat and NPCs run at normal speed.

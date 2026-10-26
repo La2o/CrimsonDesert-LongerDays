@@ -1,0 +1,96 @@
+[center][size=6][b]Longer Days[/b][/size]
+[size=3]Days that last longer and feel natural: slow afternoons, golden sunsets and short nights if you want them.[/size][/center]
+
+[line]
+
+[size=5][b]What it does[/b][/size]
+
+By default, daytime lasts [b]twice as long[/b] and night stays vanilla. Instead of one fixed speed for the whole clock, the mod shapes the day:
+
+[list]
+[*][b]Separate day and night speeds.[/b] Make days longer, nights shorter, or slow the whole cycle.
+[*][b]Smooth dawn and dusk.[/b] The speed eases between night and day, so there's no sudden switch at 6:00.
+[*][b]Golden hours.[/b] Sunrise and sunset last longer, which is good for screenshots and riding into the sunset.
+[*][b]Real-minute targets.[/b] Write "daytime lasts 90 real minutes" instead of working out a multiplier. The mod measures the game's own clock speed while you play, so the setting stays accurate after patches.
+[*][b]Seasons (optional).[/b] Days are longer in summer and shorter in winter. The defaults roughly line up with [i]Seasons of Pywel[/i].
+[*][b]The sky stays in sync.[/b] The sun, moon and sky follow the slowed clock.
+[*][b]Live tuning.[/b] Edit the INI while playing and changes apply within a second. [b]F8[/b] switches between this mod and vanilla so you can compare.
+[/list]
+
+Only the [b]clock[/b] slows down. Combat, NPCs, physics, animations and your character run at normal speed. Sleeping and waiting still work.
+
+[line]
+
+[size=5][b]Requirements[/b][/size]
+
+[list]
+[*][b]Ultimate ASI Loader (x64)[/b] by ThirteenAG: [url=https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases]GitHub releases[/url]. Skip this if your mod manager or another mod already installed an ASI loader.
+[*]Built for game version [b]2.03.00[/b]. See [i]Game updates[/i] below.
+[/list]
+
+[size=5][b]Installation[/b][/size]
+
+[list=1]
+[*]Install the ASI loader: put the [b]x64[/b] loader DLL in [b]Crimson Desert\bin64\[/b] and name it [b]winmm.dll[/b] (rename it if the download calls it dinput8.dll).
+[*]Extract this mod's zip into your [b]Crimson Desert[/b] folder. The files go into [b]bin64[/b]:
+[code]Crimson Desert\bin64\CrimsonDesertLongerDays.asi
+Crimson Desert\bin64\CrimsonDesertLongerDays.ini[/code]
+[*]Start the game. [b]bin64\CrimsonDesertLongerDays.log[/b] should contain [i]Ready.[/i]
+[/list]
+
+[b]Uninstall:[/b] delete the two files. The mod never changes game files or saves.
+
+[b]Updating:[/b] the zip includes a fresh INI. Back up your CrimsonDesertLongerDays.ini first if you've changed it.
+
+[line]
+
+[size=5][b]Settings[/b][/size]
+
+Every setting is explained in [b]CrimsonDesertLongerDays.ini[/b]. Some combinations:
+
+[list]
+[*][b]Days twice as long (default):[/b] DayLengthMultiplier=2
+[*][b]Whole cycle 3× slower:[/b] DayLengthMultiplier=3, NightLengthMultiplier=3
+[*][b]Long days, quick nights:[/b] DayLengthMultiplier=2.5, NightLengthMultiplier=0.5
+[*][b]Day lasts 2 real hours, night 20 minutes:[/b] [RealTime] DayRealMinutes=120, NightRealMinutes=20
+[*][b]Long sunsets:[/b] [GoldenHour] Multiplier=4, LengthHours=1.5
+[*][b]Long summer days, short winter days:[/b] [Seasons] Strength=0.4
+[/list]
+
+[line]
+
+[size=5][b]Compatibility[/b][/size]
+
+[list]
+[*][b]Not compatible[/b] with other mods that change the day/night speed or freeze time of day, such as Timescale or trainer "freeze time" options. They change the same values. Use only one.
+[*]Works alongside mods that don't touch time: graphics, gameplay and PAZ data mods.
+[*]Single-player only.
+[/list]
+
+[size=5][b]Game updates[/b][/size]
+
+The mod finds the game code it needs each time the game starts, so small patches often don't break it. If a patch does break it, the mod switches itself off, the game runs as vanilla, and the log says [i]signature NOT FOUND[/i]. Please report that in the Posts tab along with your game version.
+
+[size=5][b]Troubleshooting[/b][/size]
+
+[list]
+[*][b]No log file:[/b] the ASI loader isn't running. Check that winmm.dll and the mod files are in [b]bin64[/b].
+[*][b]Days aren't longer:[/b] open the log. It prints one line per in-game hour with the current speed. Make sure Enabled=1 and that you haven't pressed F8.
+[*]When reporting a problem, attach [b]CrimsonDesertLongerDays.log[/b].
+[/list]
+
+[line]
+
+[size=5][b]How it works[/b][/size]
+
+The mod hooks the game's clock tick and adjusts how much in-game time passes each frame, following a smooth schedule (see the chart in the images). It also keeps the sky's time-of-day pinned to that clock. Everything happens in memory and is undone when you toggle it off. [url=https://github.com/La2o/CrimsonDesert-LongerDays]Source code on GitHub[/url] (MIT).
+
+[size=5][b]Credits[/b][/size]
+
+[list]
+[*][url=https://github.com/XeTrinityz/Trinity]Trinity[/url] by XeTrinityz: the game clock and time-of-day research this mod builds on (MIT).
+[*][url=https://github.com/TsudaKageyu/minhook]MinHook[/url] by Tsuda Kageyu: function hooking (BSD-2).
+[*][url=https://github.com/ThirteenAG/Ultimate-ASI-Loader]Ultimate ASI Loader[/url] by ThirteenAG.
+[/list]
+
+[i]Not affiliated with or endorsed by Pearl Abyss.[/i]
