@@ -1,15 +1,26 @@
 cmake_minimum_required(VERSION 3.20)
 project(CrimsonDesertLongerDays LANGUAGES C CXX)
 
-# Builds CrimsonDesertLongerDays.asi, loaded into the game by an ASI loader
-# (Ultimate ASI Loader's winmm.dll / dinput8.dll, or a mod manager's loader).
-
-if(NOT WIN32)
-    message(FATAL_ERROR "This mod targets Windows (build with MSVC, or cross-compile with MinGW-w64).")
-endif()
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Host unit tests for the game-independent logic (any OS):
+#   cmake -S . -B build-tests -DLONGERDAYS_TESTS=ON && cmake --build build-tests && ctest --test-dir build-tests
+option(LONGERDAYS_TESTS "Build the host unit tests instead of the mod" OFF)
+if(LONGERDAYS_TESTS)
+    enable_testing()
+    add_executable(longerdays_tests tests/tests.cpp src/schedule.cpp src/rate_meter.cpp)
+    add_test(NAME longerdays_tests COMMAND longerdays_tests)
+    return()
+endif()
+
+# Builds CrimsonDesertLongerDays.asi, loaded into the game by an ASI loader
+# (Ultimate ASI Loader's winmm.dll / dinput8.dll, or a mod manager's loader).
+if(NOT WIN32)
+    message(FATAL_ERROR "The mod targets Windows (MSVC, or MinGW-w64 cross-compile). "
+                        "On other hosts, configure with -DLONGERDAYS_TESTS=ON to run the tests.")
+endif()
+
 # Static CRT so players don't need the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
@@ -24,6 +35,8 @@ FetchContent_MakeAvailable(minhook)
 add_library(CrimsonDesertLongerDays SHARED
     src/dllmain.cpp
     src/longer_days.cpp
+    src/schedule.cpp
+    src/rate_meter.cpp
     src/config.cpp
     src/scanner.cpp
     src/log.cpp

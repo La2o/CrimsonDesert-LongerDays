@@ -1,7 +1,11 @@
 #include "scanner.h"
 
 #include <windows.h>
+#include <algorithm>
+#include <utility>
 #include <vector>
+
+#include "pattern.h"
 
 namespace longerdays::mem
 {
@@ -24,57 +28,24 @@ namespace longerdays::mem
 
     namespace
     {
-        struct Pattern
-        {
-            std::vector<uint8_t> bytes;
-            std::vector<bool>    mask; // true = must match
-        };
+        constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                                    PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+        constexpr DWORD kWritable = PAGE_READWRITE | PAGE_WRITECOPY |
+                                    PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
-        int Nibble(char c)
+        bool Query(uintptr_t addr, MEMORY_BASIC_INFORMATION& mbi)
         {
-            if (c >= '0' && c <= '9') return c - '0';
-            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-            return -1;
+            return VirtualQuery(reinterpret_cast<LPCVOID>(addr), &mbi, sizeof(mbi)) == sizeof(mbi) &&
+                   mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS));
         }
 
-        Pattern Parse(std::string_view s)
+        // The game is packed, so section headers are not trusted. Walk what is
+        // actually committed and readable in the image instead, joining
+        // neighbouring regions so a signature that straddles a protection
+        // boundary is still one contiguous span.
+        std::vector<std::pair<const uint8_t*, const uint8_t*>> ReadableSpans()
         {
-            Pattern p;
-            for (size_t i = 0; i < s.size();)
-            {
-                if (s[i] == ' ') { ++i; continue; }
-                if (s[i] == '?')
-                {
-                    p.bytes.push_back(0);
-                    p.mask.push_back(false);
-                    i += (i + 1 < s.size() && s[i + 1] == '?') ? 2 : 1;
-                    continue;
-                }
-                const int hi = Nibble(s[i]);
-                const int lo = i + 1 < s.size() ? Nibble(s[i + 1]) : -1;
-                if (hi < 0 || lo < 0) { ++i; continue; }
-                p.bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
-                p.mask.push_back(true);
-                i += 2;
-            }
-            return p;
-        }
-
-        bool Readable(DWORD protect)
-        {
-            if (protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
-            return (protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                               PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                               PAGE_EXECUTE_WRITECOPY)) != 0;
-        }
-
-        // The game is packed, so section flags are not trusted: walk the
-        // committed readable spans of the image instead, merging neighbours so
-        // a pattern straddling a protection boundary is still found.
-        std::vector<std::pair<uintptr_t, uintptr_t>> Spans()
-        {
-            std::vector<std::pair<uintptr_t, uintptr_t>> spans;
+            std::vector<std::pair<const uint8_t*, const uint8_t*>> spans;
             const Module& mod = GameModule();
             const uintptr_t end = mod.base + mod.size;
             MEMORY_BASIC_INFORMATION mbi{};
@@ -83,40 +54,33 @@ namespace longerdays::mem
                 if (VirtualQuery(reinterpret_cast<LPCVOID>(a), &mbi, sizeof(mbi)) != sizeof(mbi) ||
                     mbi.RegionSize == 0)
                     break;
-                const uintptr_t lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-                const uintptr_t hi = lo + mbi.RegionSize < end ? lo + mbi.RegionSize : end;
-                if (mbi.State == MEM_COMMIT && Readable(mbi.Protect))
+                const auto lo = reinterpret_cast<const uint8_t*>(mbi.BaseAddress);
+                const auto hi = reinterpret_cast<const uint8_t*>(
+                    std::min<uintptr_t>(reinterpret_cast<uintptr_t>(lo) + mbi.RegionSize, end));
+                const bool ok = mbi.State == MEM_COMMIT && (mbi.Protect & kReadable) &&
+                                !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS));
+                if (ok)
                 {
                     if (!spans.empty() && spans.back().second == lo) spans.back().second = hi;
                     else spans.emplace_back(lo, hi);
                 }
-                a = lo + mbi.RegionSize;
+                a = reinterpret_cast<uintptr_t>(lo) + mbi.RegionSize;
             }
             return spans;
         }
 
-        std::vector<uintptr_t> Scan(std::string_view pattern, size_t maxResults)
+        std::vector<uintptr_t> Scan(std::string_view text, size_t maxResults)
         {
             std::vector<uintptr_t> hits;
-            const Pattern p = Parse(pattern);
-            const size_t n = p.bytes.size();
-            if (n == 0 || !GameModule().base) return hits;
+            const auto pattern = BytePattern::Parse(text);
+            if (!pattern || !GameModule().base) return hits;
 
-            for (const auto& [lo, hi] : Spans())
+            for (const auto& [lo, hi] : ReadableSpans())
             {
-                if (hi - lo < n) continue;
-                const auto* cur  = reinterpret_cast<const uint8_t*>(lo);
-                const auto* last = reinterpret_cast<const uint8_t*>(hi - n);
-                for (; cur <= last; ++cur)
+                for (const uint8_t* from = lo; const uint8_t* hit = pattern->Find(from, hi); from = hit + 1)
                 {
-                    if (cur[0] != p.bytes[0] && p.mask[0]) continue;
-                    size_t i = 0;
-                    while (i < n && (!p.mask[i] || cur[i] == p.bytes[i])) ++i;
-                    if (i == n)
-                    {
-                        hits.push_back(reinterpret_cast<uintptr_t>(cur));
-                        if (hits.size() >= maxResults) return hits;
-                    }
+                    hits.push_back(reinterpret_cast<uintptr_t>(hit));
+                    if (hits.size() >= maxResults) return hits;
                 }
             }
             return hits;
@@ -137,13 +101,7 @@ namespace longerdays::mem
     bool IsWritable(uintptr_t addr, size_t len)
     {
         MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(reinterpret_cast<LPCVOID>(addr), &mbi, sizeof(mbi)) != sizeof(mbi))
-            return false;
-        if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
-            return false;
-        if (!(mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
-                             PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
-            return false;
+        if (!Query(addr, mbi) || !(mbi.Protect & kWritable)) return false;
         return addr + len <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
     }
 }

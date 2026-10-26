@@ -6,7 +6,18 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build-tests -DLONGERDAYS_TESTS=ON -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror -fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build-tests
+      - name: Test
+        run: ctest --test-dir build-tests --output-on-failure
+
+  mod:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
