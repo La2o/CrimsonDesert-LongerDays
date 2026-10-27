@@ -1,18 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-- `[Seasons]` follows Seasons of Pywel: with the new `SeasonLengthDays=0`
-  (default), the season length picked in its F5 menu (3, 7, 14, 30, 45, 60 or
-  90 days) and a season locked there are read from `bin64\Seasons\Seasons.ini`, and
-  menu changes apply within a second. Set `SeasonLengthDays` to 1–365 to choose
-  your own. It replaces `YearLengthDays` and `SummerPeakDay`.
-  Tested in-game with Seasons of Pywel 1.0.4.
-- Docs: compatibility notes for Crimson Weather (leave its Time control off).
+Works with Seasons of Pywel. Tested on game build 1.0.0.2976 (2.03.02) with
+Seasons of Pywel 1.0.4.
+
+- `[Seasons]` follows Seasons of Pywel's calendar. With the new
+  `SeasonLengthDays=0` (the default), the season length picked in its F5 menu
+  (3, 7, 14, 30, 45, 60 or 90 days) and a season locked there ("Fixed") are
+  read from `bin64\Seasons\Seasons.ini`; menu changes apply within a second.
+  Without Seasons of Pywel, seasons are 30 days. Set `SeasonLengthDays` to
+  1–365 to choose your own. It replaces `YearLengthDays` and `SummerPeakDay`
+  (old INIs still load; those keys are ignored).
 - No more false "could not find the sun" warning after a minute in the main
   menu: the warning waits until a save has loaded.
-- Docs: a Compatibility section in the README, with notes for running
-  alongside Seasons of Pywel.
+- A Compatibility section in the README and mod page, with notes for Seasons
+  of Pywel and Crimson Weather (leave its Time control off).
 
 ## 0.2.0
 

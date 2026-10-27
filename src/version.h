@@ -3,7 +3,7 @@
 // Single source of the version: the log banner, the DLL's file properties
 // (version.rc) and the release zip name (CI) all read it from here.
 #define LONGERDAYS_VERSION_MAJOR 0
-#define LONGERDAYS_VERSION_MINOR 2
+#define LONGERDAYS_VERSION_MINOR 3
 #define LONGERDAYS_VERSION_PATCH 0
 
 #define LONGERDAYS_STR2(x) #x
