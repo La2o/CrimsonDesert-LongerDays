@@ -2,19 +2,22 @@
 
 #include <MinHook.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <string>
 #include <vector>
 
 #include "config.h"
+#include "game_time.h"
 #include "locate.h"
 #include "log.h"
 #include "offsets.h"
-#include "rate_meter.h"
 #include "scanner.h"
 #include "schedule.h"
 #include "sigtools.h"
@@ -27,28 +30,9 @@ namespace longerdays
 
     namespace
     {
-        // Community measurement of the vanilla clock (one real hour = 12
-        // in-game hours). Only used until the RateMeter has measured it.
+        // Vanilla clock speed if the snapshot can't tell us (one real hour =
+        // 12 in-game hours of daytime).
         constexpr float kAssumedVanillaRate = 12.0f;
-
-        // A measured vanilla rate outside this range means we are reading the
-        // wrong thing, not that the game changed its day length that much.
-        constexpr float kMinPlausibleRate = 2.0f;
-        constexpr float kMaxPlausibleRate = 120.0f;
-
-        // --- Shared with the clock hook (any game thread) -------------------
-        // The multiplier currently in force. AfterTick recomputes it; the hook
-        // only reads it, so the hot path is one load and one divide.
-        std::atomic<float> g_length{1.0f};
-
-        // Clock-tick seconds actually handed to the game, summed for ONE tick
-        // manager (the tick may run once per realm per frame; counting both
-        // would double it). If that manager stops ticking - torn down on a
-        // reload - another one is adopted after a run of misses.
-        std::atomic<void*>    g_meterMgr{nullptr};
-        std::atomic<double>   g_appliedSeconds{0.0};
-        std::atomic<uint32_t> g_meterMisses{0};
-        constexpr uint32_t    kAdoptAfterMisses = 600;
 
         // Self-check of the hook: a real frame step is a small positive number
         // of seconds. Anything else is passed through untouched and counted.
@@ -63,8 +47,7 @@ namespace longerdays
         std::wstring     g_iniPath;
         Config           g_cfg;
         bool             g_enabled = true; // INI Enabled, flipped by the hotkey
-        RateMeter        g_meter{kAssumedVanillaRate};
-        bool             g_reportedCalibration = false;
+        float            g_vanillaRate = kAssumedVanillaRate; // the snapshot's own rate
         ULONGLONG        g_nextIniCheck = 0;
         FILETIME         g_iniStamp{};
         bool             g_keyWasDown = false;
@@ -73,11 +56,26 @@ namespace longerdays
         int              g_lastLoggedHour = -1;
         bool             g_tickChecked = false;
 
-        // Clock watchdog: the clock must move while ticks are applied.
+        // Time steering (SteerTime): the game-millisecond counter as last
+        // seen, the sub-millisecond remainder of the stamp shift, and the
+        // client stamp we left behind, to notice when the game re-anchors.
+        bool      g_haveNow     = false;
+        uint64_t  g_lastNow     = 0;
+        double    g_carry       = 0.0;
+        double    g_realSeconds = 0.0; // unpaused game time seen, in seconds
+        uint64_t  g_expectStamp = 0;
+        uint32_t  g_reanchors   = 0;
+        constexpr uint64_t kMaxSteerStepMs = 2000; // longer gaps are hitches; not steered
+
+        // Measured clock speed between hourly log lines.
+        double    g_hourRealSeconds  = 0.0;
+        int64_t   g_hourClockSeconds = -1;
+
+        // Clock watchdog: the clock must move while game time passes.
         int64_t   g_lastClockSeconds = -1;
-        double    g_appliedAtClockMove = 0.0;
+        double    g_realAtClockMove = 0.0;
         bool      g_clockStale = false;
-        constexpr double kStaleAfterAppliedSeconds = 90.0; // ~18 vanilla game minutes
+        constexpr double kStaleAfterRealSeconds = 90.0;
 
         // Sun. Found by a background thread (SunFinderThread) so the search
         // never costs the game a frame, and published once via g_todReady.
@@ -100,7 +98,7 @@ namespace longerdays
         constexpr ULONGLONG kSunVerifyMs = 5000;
 
         // --- Resolved at load; 0 means that sub-feature is unavailable -------
-        uintptr_t g_clock = 0; // client-realm {day, hour, min, sec}
+        locate::FieldTime g_ft{}; // the field clock's snapshots and counter
 
         using FieldTimeTick_t = void (*)(void* mgr, float delta, float unused);
         FieldTimeTick_t g_origTick   = nullptr;
@@ -108,7 +106,31 @@ namespace longerdays
 
         float ReadF32(uintptr_t a)           { float v; std::memcpy(&v, reinterpret_cast<const void*>(a), 4); return v; }
         void  WriteF32(uintptr_t a, float v) { std::memcpy(reinterpret_cast<void*>(a), &v, 4); }
-        int   ReadI32(uintptr_t a)           { return *reinterpret_cast<volatile const int32_t*>(a); }
+
+        using gametime::Snapshot;
+
+        Snapshot ReadSnapshot(uintptr_t a)
+        {
+            Snapshot s;
+            std::memcpy(&s, reinterpret_cast<const void*>(a), sizeof(s));
+            return s;
+        }
+
+        volatile LONG64* StampOf(uintptr_t snapshot)
+        {
+            return reinterpret_cast<volatile LONG64*>(snapshot + offsetof(Snapshot, stamp));
+        }
+
+        // The game's own millisecond counter (stops while the game is paused),
+        // and what the client realm adds to it.
+        uint64_t GameNow()
+        {
+            return reinterpret_cast<uint64_t (*)()>(g_ft.nowFn)();
+        }
+        int64_t ClientNowOffset()
+        {
+            return *reinterpret_cast<volatile const int64_t*>(g_ft.nowOffset);
+        }
 
         struct Clock
         {
@@ -117,17 +139,81 @@ namespace longerdays
             int64_t TotalSeconds() const { return ((int64_t{day} * 24 + hour) * 60 + minute) * 60 + second; }
         };
 
-        // False when the clock didn't resolve or holds no sane time yet
-        // (main menu, still loading).
+        // The live time, computed the way the game's getter does. False when
+        // the snapshot holds no sane time yet (main menu, still loading).
         bool ReadClock(Clock& c)
         {
-            if (!g_clock) return false;
-            c.day    = ReadI32(g_clock + kOff_FieldTime_Day);
-            c.hour   = ReadI32(g_clock + kOff_FieldTime_Hour);
-            c.minute = ReadI32(g_clock + kOff_FieldTime_Min);
-            c.second = ReadI32(g_clock + kOff_FieldTime_Sec);
-            return c.day >= 0 && c.hour >= 0 && c.hour < 24 &&
-                   c.minute >= 0 && c.minute < 60 && c.second >= 0 && c.second < 60;
+            if (!g_ft) return false;
+            const Snapshot snap = ReadSnapshot(g_ft.client);
+            if (!gametime::Plausible(snap)) return false;
+            const Snapshot live = gametime::At(snap, GameNow() + ClientNowOffset());
+            c.day    = static_cast<int>(live.day);
+            c.hour   = static_cast<int>(live.hour);
+            c.minute = static_cast<int>(live.minute);
+            c.second = static_cast<int>(live.second);
+            g_vanillaRate = static_cast<float>(snap.rate);
+            return true;
+        }
+
+        // Moves one snapshot's stamp by `shift` game milliseconds: forward
+        // slows the clock, back speeds it up. A stamp that would go below
+        // zero is first re-anchored at `now` (same time, fresh stamp).
+        void Steer(uintptr_t snapshot, uint64_t now, int64_t shift)
+        {
+            Snapshot s = ReadSnapshot(snapshot);
+            if (!gametime::Plausible(s)) return;
+            int64_t want = static_cast<int64_t>(s.stamp) + shift;
+            if (want < 0)
+            {
+                const Snapshot anchored = gametime::At(s, now);
+                std::memcpy(reinterpret_cast<void*>(snapshot), &anchored, sizeof(anchored));
+                s = anchored;
+                want = static_cast<int64_t>(now) + shift;
+                if (want < 0) return;
+            }
+            // Never anchor in the future: the clock would stop dead.
+            if (shift > 0 && want > static_cast<int64_t>(now))
+                want = std::max(static_cast<int64_t>(now), static_cast<int64_t>(s.stamp));
+            InterlockedCompareExchange64(StampOf(snapshot), want, static_cast<LONG64>(s.stamp));
+        }
+
+        // Once per frame: let 1/length of the game time that just passed
+        // count on the clock. Both realms get the same shift, so they agree.
+        void SteerTime(float length)
+        {
+            const uint64_t raw = GameNow();
+            if (!g_haveNow || raw < g_lastNow)
+            {
+                g_haveNow = true;
+                g_lastNow = raw;
+                g_carry   = 0.0;
+                return;
+            }
+            const uint64_t dt = raw - g_lastNow;
+            g_lastNow = raw;
+
+            // Did the game re-anchor the clock itself (load, sleep, sync)?
+            const uint64_t stamp = static_cast<uint64_t>(*StampOf(g_ft.client));
+            if (g_expectStamp && stamp != g_expectStamp && ++g_reanchors <= 5)
+            {
+                const Snapshot s = ReadSnapshot(g_ft.client);
+                LOG("The game re-anchored the clock at Day %u %02u:%02u:%02u (rate %u)%s.", s.day, s.hour,
+                    s.minute, s.second, s.rate, g_reanchors == 5 ? "; not logging further ones" : "");
+            }
+
+            if (dt > 0 && dt <= kMaxSteerStepMs)
+            {
+                g_realSeconds += dt / 1000.0;
+                const double want = dt * (1.0 - 1.0 / length) + g_carry;
+                const int64_t shift = static_cast<int64_t>(std::floor(want));
+                g_carry = want - static_cast<double>(shift);
+                if (shift != 0)
+                {
+                    Steer(g_ft.client, raw + ClientNowOffset(), shift);
+                    if (g_ft.server) Steer(g_ft.server, raw, shift);
+                }
+            }
+            g_expectStamp = static_cast<uint64_t>(*StampOf(g_ft.client));
         }
 
         HWND GameWindowIfFocused()
@@ -209,7 +295,6 @@ namespace longerdays
         void EnterSafeMode(const char* why)
         {
             g_safeMode.store(true);
-            g_length.store(1.0f, std::memory_order_relaxed);
             if (g_todReady.load()) ReleaseSun(locate::TodManager(g_tod));
             LOG("SAFE MODE: %s. Longer Days has stopped changing anything; the game runs at "
                 "vanilla speed. A game update probably changed this code - please report the log.", why);
@@ -231,12 +316,12 @@ namespace longerdays
                 LOG("Self-check passed: the hooked clock tick receives normal frame times.");
         }
 
-        // The clock must advance while time is being applied. If it doesn't
-        // (a game update moved it, or another mod froze time), stop steering by
+        // The clock must advance while game time passes. If it doesn't (a
+        // game update changed it, or another mod froze time), stop steering by
         // it until it moves again.
         bool ClockTrustworthy(const Clock& c)
         {
-            const double applied = g_appliedSeconds.load(std::memory_order_relaxed);
+            const double applied = g_realSeconds;
             const int64_t secs = c.TotalSeconds();
             if (secs != g_lastClockSeconds)
             {
@@ -244,11 +329,11 @@ namespace longerdays
                 if (g_clockStale)
                     LOG("The clock is moving again; dawn/dusk, golden hour and seasons are back on.");
                 g_lastClockSeconds = secs;
-                g_appliedAtClockMove = applied;
+                g_realAtClockMove = applied;
                 g_clockStale = false;
                 return true;
             }
-            if (!g_clockStale && applied - g_appliedAtClockMove > kStaleAfterAppliedSeconds)
+            if (!g_clockStale && applied - g_realAtClockMove > kStaleAfterRealSeconds)
             {
                 g_clockStale = true;
                 LOG("WARNING: the in-game clock has not moved for a while although time is "
@@ -258,11 +343,7 @@ namespace longerdays
             return !g_clockStale;
         }
 
-        float VanillaRate()
-        {
-            const float r = g_meter.Rate();
-            return r >= kMinPlausibleRate && r <= kMaxPlausibleRate ? r : kAssumedVanillaRate;
-        }
+        float VanillaRate() { return g_vanillaRate; }
 
         void LogConfig(const char* what)
         {
@@ -349,10 +430,20 @@ namespace longerdays
             const char* phase = s.golden > 0.5f ? "golden hour"
                               : s.dayness >= 0.99f ? "day"
                               : s.dayness <= 0.01f ? "night" : (c.hour < 12 ? "dawn" : "dusk");
-            LOG("Day %d %02d:%02d %-11s time x%.2f slower%s | vanilla clock %.1fx real time (%s)",
+
+            // How fast the clock really ran since the previous line: the
+            // proof that the steering works (vanilla: 12x by day, 24x at night).
+            char ran[48] = "";
+            const double real = g_realSeconds - g_hourRealSeconds;
+            const int64_t game = c.TotalSeconds() - g_hourClockSeconds;
+            if (g_hourClockSeconds >= 0 && real > 5.0 && game > 0 && game < 6 * 3600)
+                std::snprintf(ran, sizeof(ran), " | ran %.1fx real time", game / real);
+            g_hourRealSeconds  = g_realSeconds;
+            g_hourClockSeconds = c.TotalSeconds();
+
+            LOG("Day %d %02d:%02d %-11s time x%.2f slower%s | vanilla clock %.0fx%s",
                 c.day, c.hour, c.minute, phase, g_enabled ? s.length : 1.0f,
-                g_enabled ? "" : " [OFF]", VanillaRate(),
-                g_meter.Calibrated() ? "measured" : "assumed");
+                g_enabled ? "" : " [OFF]", VanillaRate(), ran);
         }
 
         // Housekeeping after each clock tick. Only one thread runs it at a
@@ -371,21 +462,6 @@ namespace longerdays
 
             Clock clock;
             const bool haveClock = ReadClock(clock) && ClockTrustworthy(clock);
-            if (haveClock)
-            {
-                g_meter.Feed(g_appliedSeconds.load(std::memory_order_relaxed), clock.TotalSeconds());
-                if (g_meter.Calibrated() && !g_reportedCalibration)
-                {
-                    g_reportedCalibration = true;
-                    const float r = g_meter.Rate();
-                    if (r >= kMinPlausibleRate && r <= kMaxPlausibleRate)
-                        LOG("Measured vanilla clock speed: %.2f in-game seconds per real second "
-                            "(a full vanilla day = %.0f real minutes).", r, 24.0f * 60.0f / r);
-                    else
-                        LOG("WARNING: measured a vanilla clock speed of %.2f, which can't be right; "
-                            "using the assumed %.0f for real-minute targets.", r, kAssumedVanillaRate);
-                }
-            }
 
             float length = 1.0f;
             if (haveClock)
@@ -401,39 +477,19 @@ namespace longerdays
                 length = g_cfg.dayLength;
             }
             if (g_fastForward) length = 1.0f / g_cfg.fastForwardSpeed;
-            g_length.store(length, std::memory_order_relaxed);
+            SteerTime(length);
 
             SyncSun(haveClock, haveClock ? clock.Hours() : 0.0f);
             g_tickBusy.clear(std::memory_order_release);
         }
 
+        // The tick is only our once-per-frame callback on the game thread;
+        // its delta goes through untouched.
         void HookedFieldTimeTick(void* mgr, float delta, float unused)
         {
             g_tickCalls.fetch_add(1, std::memory_order_relaxed);
             if (!(delta >= 0.0f && delta < kMaxFrameStep)) // also catches NaN
-            {
                 g_tickOdd.fetch_add(1, std::memory_order_relaxed);
-                g_origTick(mgr, delta, unused);
-                AfterTick();
-                return;
-            }
-
-            if (!g_safeMode.load(std::memory_order_relaxed))
-                delta /= g_length.load(std::memory_order_relaxed);
-
-            if (mgr == g_meterMgr.load(std::memory_order_relaxed))
-            {
-                g_appliedSeconds.store(g_appliedSeconds.load(std::memory_order_relaxed) + delta,
-                                       std::memory_order_relaxed);
-                g_meterMisses.store(0, std::memory_order_relaxed);
-            }
-            else if (g_meterMgr.load(std::memory_order_relaxed) == nullptr ||
-                     g_meterMisses.fetch_add(1, std::memory_order_relaxed) > kAdoptAfterMisses)
-            {
-                g_meterMgr.store(mgr, std::memory_order_relaxed);
-                g_meterMisses.store(0, std::memory_order_relaxed);
-            }
-
             g_origTick(mgr, delta, unused);
             AfterTick();
         }
@@ -621,16 +677,19 @@ namespace longerdays
         LOG("Clock tick found via %s at exe+0x%llX.", tick.how,
             static_cast<unsigned long long>(tick.addr - mem::GameModule().base));
 
-        if (const locate::Hit clock = locate::FieldClock())
+        g_ft = locate::FieldClock();
+        if (!g_ft)
         {
-            g_clock = clock.addr;
-            LOG("Field clock found via %s.", clock.how);
+            LOG("ERROR: the field clock was NOT FOUND (snapshot %s, counter %s). This game version "
+                "is not supported yet. Mod inactive; the game is untouched.",
+                g_ft.client ? "found" : "missing", g_ft.nowFn ? "found" : "missing");
+            ShowStartupFailure();
+            return;
         }
-        else
-        {
-            LOG("WARNING: field clock NOT FOUND - dawn/dusk, golden hour, seasons, "
-                "real-time targets and sun sync are off; DayLengthMultiplier applies around the clock.");
-        }
+        const uintptr_t exeBase = mem::GameModule().base;
+        LOG("Field clock found via %s: snapshot exe+0x%llX%s, counter exe+0x%llX.", g_ft.how,
+            static_cast<unsigned long long>(g_ft.client - exeBase), g_ft.server ? " (+ server copy)" : "",
+            static_cast<unsigned long long>(g_ft.nowFn - exeBase));
 
         g_todLayout = locate::LocateTodLayout();
         if (g_todLayout)

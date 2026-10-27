@@ -10,8 +10,8 @@ whole clock, it shapes the day:
 - **Golden hours.** Sunrise and sunset last longer, slowing most at the exact
   moment and less on either side.
 - **Real-minute targets.** Write "daytime lasts 90 real minutes" instead of
-  working out a multiplier. The mod measures the game's own clock speed while
-  you play, so the target stays accurate after a patch.
+  working out a multiplier. The mod reads the clock speed from the game itself,
+  so the target stays accurate after a patch.
 - **Seasons (optional).** Days are longer in summer and shorter in winter
   across the in-game year. The defaults roughly line up with
   *Seasons of Pywel*.
@@ -113,20 +113,24 @@ game, and [`tests/tests.cpp`](tests/tests.cpp) tests it.
 
 To apply the speed, the mod changes two parts of the game:
 
-1. **The field clock.** Each frame, a tick function adds the frame time to the
-   accumulator that the `{day, hour, minute, second}` clock comes from. The mod
-   hooks the tick and divides the frame time by the current speed.
+1. **The field clock.** The game doesn't add up frame times. It keeps a
+   snapshot (`{day, hour, minute, second, ms}`, a rate and a timestamp) and
+   works out the current time on every read: snapshot + (game milliseconds
+   since the timestamp) × rate. Each frame the mod moves the timestamp forward
+   by part of the time that just passed, so only 1/speed of it counts. Moving
+   it back fast-forwards. The snapshot always stays a valid game value, so
+   saves and uninstalling are unaffected. The math mirrors the game's own and
+   is tested in [`src/game_time.h`](src/game_time.h). The hooked clock tick
+   is just the mod's once-per-frame callback.
 2. **The visible sun.** The render-side TimeOfDay manager moves the sun on its
    own separate accumulator. The mod pins its `[lower, upper]` time limit to the
    field clock's hour every frame, so the sun follows the slowed clock. The
    original limits are restored when the mod is turned off.
 
-**Measuring the clock speed.** The mod keeps two running totals: the tick time
-it handed to the game, and the in-game seconds that passed. After every 10
-in-game minutes, the ratio of the two gives the vanilla clock speed. If the
-clock jumps by more than any real speed could explain (sleeping, waiting,
-loading), the measurement window starts over. See
-[`src/rate_meter.cpp`](src/rate_meter.cpp).
+**The clock speed.** The vanilla speed is read from the snapshot's own rate
+(12: daytime runs 12× real time, and the game counts 21:00–03:00 at half
+weight, so night runs 24×). Each hourly log line also reports how fast the
+last hour actually ran.
 
 **Finding the game code.** All game-specific knowledge is in
 [`src/offsets.h`](src/offsets.h), as byte signatures that are scanned when the
@@ -169,11 +173,10 @@ the feature and wildcard what a recompile tends to shuffle:
 - The hook checks that it receives real frame times. If most of them aren't,
   it enters **safe mode**: the hook stays in but changes nothing, and a
   warning appears on screen.
-- The clock must advance while time is applied. If it stops, the mod falls
+- The clock must advance while game time passes. If it stops, the mod falls
   back to the plain day multiplier until it moves again.
 - After pinning the sun, the sky must follow within 5 seconds, or sun sync is
   released for the session.
-- A measured clock speed that can't be right is ignored.
 
 **On-screen notice.** If no signature finds the clock tick at all, nothing is
 hooked, and a toast says the update isn't supported yet.

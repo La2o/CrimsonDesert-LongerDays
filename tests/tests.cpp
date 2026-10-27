@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "../src/pattern.h"
-#include "../src/rate_meter.h"
+#include "../src/game_time.h"
 #include "../src/schedule.h"
 #include "../src/sigtools.h"
 #include "../src/offsets.h"
@@ -105,38 +105,46 @@ static void TestSeasons()
     CHECK(Near(LengthAt(c, 12.0f, 135, 12.0f).length, 3.0f)); // next year's summer
 }
 
-static void TestRateMeter()
+// The snapshot clock, against the game's own conversions (build 2.03.02).
+static void TestGameTime()
 {
-    RateMeter m(12.0f);
-    CHECK(!m.Calibrated());
+    using namespace gametime;
+    // Read live from the game: Day 60 17:50:41.832, rate 12, stamp 91410.
+    Snapshot s{60, 17, 50, 41, 832, 60 % 7, 0, 12, 91410};
+    CHECK(Plausible(s));
 
-    // 60 fps, clock running at 10 game-s per applied second.
-    double applied = 0.0;
-    double clock = 1000.0;
-    for (int i = 0; i < 60 * 70; ++i)
+    // Night counts half: 03:00 is 1.5 h of units, 21:00 is 19.5 h, 24:00 a day.
+    Snapshot t{0, 3, 0, 0, 0, 0, 0, 12, 0};
+    CHECK(Units(t) == 5'400'000);
+    t.hour = 21;
+    CHECK(Units(t) == 70'200'000);
+    t.hour = 23; t.minute = 59; t.second = 59; t.ms = 999;
+    CHECK(Units(t) == kDayUnits - 1);
+
+    // Units and fields round-trip across every phase of the day.
+    for (uint64_t u = 0; u < 2 * kDayUnits; u += 777'777)
     {
-        applied += 1.0 / 60.0;
-        clock += 10.0 / 60.0;
-        m.Feed(applied, static_cast<int64_t>(clock));
+        Snapshot r = s;
+        SetUnits(r, u);
+        CHECK(Plausible(r));
+        CHECK(Units(r) == u);
     }
-    CHECK(m.Calibrated());
-    CHECK(Near(m.Rate(), 10.0f, 0.05f));
 
-    // A sleep (8 h jump) restarts the window instead of skewing the rate.
-    clock += 8 * 3600;
-    for (int i = 0; i < 60 * 70; ++i)
-    {
-        applied += 1.0 / 60.0;
-        clock += 10.0 / 60.0;
-        m.Feed(applied, static_cast<int64_t>(clock));
-    }
-    CHECK(Near(m.Rate(), 10.0f, 0.05f));
+    // 137.5 s of game time at rate 12 = 1,650,000 units: 27.5 minutes of
+    // daytime, so 17:50:41.832 -> 18:18:11.832, re-anchored at the new stamp.
+    const Snapshot later = At(s, 91410 + 137'500);
+    CHECK(later.day == 60 && later.hour == 18 && later.minute == 18 && later.second == 11 && later.ms == 832);
+    CHECK(later.stamp == 91410 + 137'500 && later.rate == 12);
+    CHECK(UnitsAt(later, later.stamp) == UnitsAt(s, later.stamp)); // same moment, same time
 
-    // Paused game: no applied time, no clock movement - nothing measured.
-    RateMeter p(12.0f);
-    for (int i = 0; i < 10000; ++i) p.Feed(5.0, 500);
-    CHECK(!p.Calibrated());
-    CHECK(Near(p.Rate(), 12.0f));
+    // A stamp in the future freezes the clock rather than running it back.
+    CHECK(UnitsAt(s, 1000) == Units(s));
+
+    // Steering: shifting the stamp forward by half of each step halves the speed.
+    Snapshot slow = s;
+    uint64_t now = s.stamp;
+    for (int i = 0; i < 600; ++i) { now += 100; slow.stamp += 50; }
+    CHECK(UnitsAt(slow, now) - Units(s) == 60'000 / 2 * 12);
 }
 
 static void TestPattern()
@@ -264,7 +272,7 @@ int main()
     TestGoldenHour();
     TestRealMinutes();
     TestSeasons();
-    TestRateMeter();
+    TestGameTime();
     TestPattern();
     TestTickSignatures();
     TestSigTools();

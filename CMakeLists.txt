@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(LONGERDAYS_TESTS "Build the host unit tests instead of the mod" OFF)
 if(LONGERDAYS_TESTS)
     enable_testing()
-    add_executable(longerdays_tests tests/tests.cpp src/schedule.cpp src/rate_meter.cpp)
+    add_executable(longerdays_tests tests/tests.cpp src/schedule.cpp)
     add_test(NAME longerdays_tests COMMAND longerdays_tests)
     return()
 endif()
@@ -38,7 +38,6 @@ add_library(CrimsonDesertLongerDays SHARED
     src/dllmain.cpp
     src/longer_days.cpp
     src/schedule.cpp
-    src/rate_meter.cpp
     src/config.cpp
     src/scanner.cpp
     src/locate.cpp

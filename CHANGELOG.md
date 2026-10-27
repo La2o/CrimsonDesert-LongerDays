@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Fixed: on build 2.03.02 the mod didn't slow time at all.** The game no
+  longer advances the clock from the hooked tick's frame time; it derives the
+  time from a snapshot plus elapsed game time × rate. The mod now steers that
+  snapshot's timestamp every frame and reads the live time the same way the
+  game does. The hourly log line shows how fast the clock really ran.
+- The vanilla clock speed is read from the game instead of measured (the rate
+  meter is gone).
 - Hold **F7** to fast-forward time (x30 by default; `FastForwardKey`,
   `FastForwardSpeed`). Handy for watching a sunset in seconds or checking
   that the sky follows the clock.

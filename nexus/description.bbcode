@@ -11,7 +11,7 @@ By default, daytime lasts [b]twice as long[/b] and night stays vanilla. Instead 
 [*][b]Separate day and night speeds.[/b] Make days longer, nights shorter, or slow the whole cycle.
 [*][b]Smooth dawn and dusk.[/b] The speed eases between night and day, so there's no sudden switch at 6:00.
 [*][b]Golden hours.[/b] Sunrise and sunset last longer, which is good for screenshots and riding into the sunset.
-[*][b]Real-minute targets.[/b] Write "daytime lasts 90 real minutes" instead of working out a multiplier. The mod measures the game's own clock speed while you play, so the setting stays accurate after patches.
+[*][b]Real-minute targets.[/b] Write "daytime lasts 90 real minutes" instead of working out a multiplier. The mod reads the clock speed from the game itself, so the setting stays accurate after patches.
 [*][b]Seasons (optional).[/b] Days are longer in summer and shorter in winter. The defaults roughly line up with [i]Seasons of Pywel[/i].
 [*][b]The sky stays in sync.[/b] The sun, moon and sky follow the slowed clock.
 [*][b]Live tuning.[/b] Edit the INI while playing and changes apply within a second. [b]F8[/b] switches between this mod and vanilla so you can compare, with a short on-screen note showing which is active. Hold [b]F7[/b] to fast-forward time and watch a whole sunset in seconds.
@@ -21,7 +21,7 @@ Only the [b]clock[/b] slows down. Combat, NPCs, physics, animations and your cha
 
 [size=5][b]How it's different[/b][/size]
 
-Other mods can make the clock run slower or faster. Longer Days [i]shapes[/i] the day instead. It's the only one with smooth dawn and dusk, longer golden hours and seasonal day length, and you can set day and night in real minutes, measured from your own game. It needs no ReShade and no menu: save the INI and changes apply within a second.
+Other mods can make the clock run slower or faster. Longer Days [i]shapes[/i] the day instead. It's the only one with smooth dawn and dusk, longer golden hours and seasonal day length, and you can set day and night in real minutes, matched to the game's own clock. It needs no ReShade and no menu: save the INI and changes apply within a second.
 
 [line]
 
@@ -94,7 +94,7 @@ If you see that message after a patch, please post your [b]CrimsonDesertLongerDa
 
 [size=5][b]How it works[/b][/size]
 
-The mod hooks the game's clock tick and adjusts how much in-game time passes each frame, following a smooth schedule (see the chart in the images). It also keeps the sky's time-of-day pinned to that clock. Everything happens in memory and is undone when you toggle it off. [url=https://github.com/La2o/CrimsonDesert-LongerDays]Source code on GitHub[/url] (MIT).
+Each frame the mod adjusts how much in-game time passes, by moving the timestamp the game measures its clock from, following a smooth schedule (see the chart in the images). It also keeps the sky's time-of-day pinned to that clock. Everything happens in memory and is undone when you toggle it off. [url=https://github.com/La2o/CrimsonDesert-LongerDays]Source code on GitHub[/url] (MIT).
 
 [size=5][b]Credits[/b][/size]
 

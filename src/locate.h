@@ -16,8 +16,18 @@ namespace longerdays::locate
     // Start of the field-time tick function (the hook target).
     Hit FieldTimeTick();
 
-    // The client-realm {day, hour, minute, second} global.
-    Hit FieldClock();
+    // The field clock: both realms' snapshot globals (gametime::Snapshot) and
+    // the game-millisecond counter they are measured against.
+    struct FieldTime
+    {
+        uintptr_t   client = 0;     // snapshot read when the TLS realm flag is clear
+        uintptr_t   server = 0;     // the other one; 0 if not found
+        uintptr_t   nowFn  = 0;     // uint64_t() game milliseconds
+        uintptr_t   nowOffset = 0;  // int64 global added to nowFn() for the client realm
+        const char* how    = "";
+        explicit operator bool() const { return client && nowFn && nowOffset; }
+    };
+    FieldTime FieldClock();
 
     // Every plausible TimeOfDay engine global, most likely first. Which one is
     // real can only be told in-world (TodCandidates + StillMoving).

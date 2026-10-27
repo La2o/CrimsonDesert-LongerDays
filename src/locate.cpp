@@ -157,15 +157,24 @@ namespace longerdays::locate
         return {};
     }
 
-    Hit FieldClock()
+    FieldTime FieldClock()
     {
         static const char* const kHow[] = {"exact signature (build 2.03.00)", "realm select",
                                            "realm test"};
         static_assert(std::size(kHow) == std::size(kSig_FieldTimeRealm));
         constexpr uint8_t kVmovups[] = {0xC5, 0xFC, 0x10, 0x05};
-
         const mem::Module& mod = mem::GameModule();
-        for (size_t i = 0; i < std::size(kSig_FieldTimeRealm); ++i)
+
+        // A snapshot global: 32 bytes in the exe's data, read by a vmovups.
+        const auto snapshotAt = [&](uintptr_t instr) -> uintptr_t {
+            if (std::memcmp(reinterpret_cast<const void*>(instr), kVmovups, sizeof(kVmovups)) != 0)
+                return 0;
+            const uintptr_t g = mem::ResolveRipAt(instr, kLen_FieldTime_Vmovups);
+            return mod.Contains(g) && (g & 7) == 0 && mem::IsWritable(g, 32) ? g : 0;
+        };
+
+        FieldTime ft;
+        for (size_t i = 0; i < std::size(kSig_FieldTimeRealm) && !ft.client; ++i)
         {
             const RealmSig& sig = kSig_FieldTimeRealm[i];
             const auto hits = mem::FindAll(sig.pattern, 2);
@@ -173,13 +182,26 @@ namespace longerdays::locate
             if (hits.empty() || (i > 0 && hits.size() != 1)) continue;
 
             const uintptr_t instr = hits[0] + sig.clientVmovups;
-            if (std::memcmp(reinterpret_cast<const void*>(instr), kVmovups, sizeof(kVmovups)) != 0)
-                continue;
-            const uintptr_t clock = mem::ResolveRipAt(instr, kLen_FieldTime_Vmovups);
-            if (mod.Contains(clock) && (clock & 3) == 0 && mem::IsReadable(clock, 16))
-                return {clock, kHow[i]};
+            if ((ft.client = snapshotAt(instr)) == 0) continue;
+            ft.server = snapshotAt(instr + kOff_ServerVmovups);
+            if (ft.server == ft.client) ft.server = 0;
+            ft.how = kHow[i];
         }
-        return {};
+        if (!ft.client) return {};
+
+        // The counter must be unique, and both its targets must be ours.
+        const auto now = mem::FindAll(kSig_FieldTimeNow, 2);
+        if (now.size() == 1)
+        {
+            const uintptr_t off = mem::ResolveRipAt(now[0], kLen_NowOffsetMov);
+            const uintptr_t fn  = mem::ResolveRipAt(now[0] + kOff_NowCall, kLen_NowCall);
+            if (mod.Contains(off) && (off & 7) == 0 && mem::IsReadable(off, 8) && mod.Contains(fn))
+            {
+                ft.nowOffset = off;
+                ft.nowFn = fn;
+            }
+        }
+        return ft;
     }
 
     std::vector<uintptr_t> TodEngineGlobals(bool& firstIsRegistrar)
