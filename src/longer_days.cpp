@@ -45,11 +45,13 @@ namespace longerdays
         // --- Owned by AfterTick (one thread at a time via g_tickBusy) --------
         std::atomic_flag g_tickBusy = ATOMIC_FLAG_INIT;
         std::wstring     g_iniPath;
+        std::wstring     g_seasonsIniPath; // Seasons of Pywel's, read for its season length
         Config           g_cfg;
         bool             g_enabled = true; // INI Enabled, flipped by the hotkey
         float            g_vanillaRate = kAssumedVanillaRate; // the snapshot's own rate
         ULONGLONG        g_nextIniCheck = 0;
         FILETIME         g_iniStamp{};
+        FILETIME         g_seasonsIniStamp{};
         bool             g_keyWasDown = false;
         bool             g_ffWasDown  = false;
         bool             g_fastForward = false; // fast-forward key held
@@ -353,17 +355,33 @@ namespace longerdays
 
         float VanillaRate() { return g_vanillaRate; }
 
+        const char* LockedSeason(int season)
+        {
+            static const char* const kLocked[] = {", locked to summer", ", locked to autumn",
+                                                  ", locked to winter", ", locked to spring"};
+            return season >= 0 && season < 4 ? kLocked[season] : "";
+        }
+
         void LogConfig(const char* what)
         {
             const Config& c = g_cfg;
             LOG("%s: enabled=%d | day x%.2f night x%.2f, day %.1fh-%.1fh, blend %.1fh | "
                 "golden hour x%.2f over %.1fh | real minutes day=%.0f night=%.0f | "
-                "seasons %.0f%% over %.0f days (peak day %.0f) | syncSun=%d toggleKey=0x%X showToast=%d "
+                "seasons %.0f%%, %.0f days each%s%s | syncSun=%d toggleKey=0x%X showToast=%d "
                 "fastForward=0x%X x%.0f",
                 what, c.enabled, c.dayLength, c.nightLength, c.dayStartHour, c.dayEndHour,
                 c.transitionHours, c.goldenHourMultiplier, c.goldenHourLength, c.dayRealMinutes,
-                c.nightRealMinutes, c.seasonStrength * 100.0f, c.yearLengthDays, c.summerPeakDay,
+                c.nightRealMinutes, c.seasonStrength * 100.0f, c.seasonLengthDays,
+                c.seasonsFromPywel ? " (from Seasons of Pywel)" : "", LockedSeason(c.fixedSeason),
                 c.syncSun, c.toggleKey, c.showToast, c.fastForwardKey, c.fastForwardSpeed);
+        }
+
+        // A file's last write time, or zero when it doesn't exist.
+        FILETIME WriteTime(const std::wstring& path)
+        {
+            WIN32_FILE_ATTRIBUTE_DATA fad{};
+            return GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad) ? fad.ftLastWriteTime
+                                                                                   : FILETIME{};
         }
 
         void PollIni()
@@ -372,12 +390,15 @@ namespace longerdays
             if (now < g_nextIniCheck) return;
             g_nextIniCheck = now + 1000;
 
-            WIN32_FILE_ATTRIBUTE_DATA fad{};
-            if (!GetFileAttributesExW(g_iniPath.c_str(), GetFileExInfoStandard, &fad)) return;
-            if (CompareFileTime(&fad.ftLastWriteTime, &g_iniStamp) == 0) return;
-            g_iniStamp = fad.ftLastWriteTime;
+            // Either INI: Seasons of Pywel saves its own when its menu changes.
+            const FILETIME ours = WriteTime(g_iniPath), seasons = WriteTime(g_seasonsIniPath);
+            if (CompareFileTime(&ours, &g_iniStamp) == 0 &&
+                CompareFileTime(&seasons, &g_seasonsIniStamp) == 0)
+                return;
+            g_iniStamp = ours;
+            g_seasonsIniStamp = seasons;
 
-            g_cfg = Config::Load(g_iniPath);
+            g_cfg = Config::Load(g_iniPath, g_seasonsIniPath);
             g_enabled = g_cfg.enabled;
             LogConfig("Config reloaded");
         }
@@ -684,12 +705,12 @@ namespace longerdays
         LOG("Host process: %ls", exe);
         LogGameBuild(exe);
 
-        WIN32_FILE_ATTRIBUTE_DATA fad{};
-        if (GetFileAttributesExW(g_iniPath.c_str(), GetFileExInfoStandard, &fad))
-            g_iniStamp = fad.ftLastWriteTime;
-        else
+        g_seasonsIniPath = g_iniPath.substr(0, g_iniPath.find_last_of(L'\\') + 1) + L"Seasons.ini";
+        g_iniStamp = WriteTime(g_iniPath);
+        g_seasonsIniStamp = WriteTime(g_seasonsIniPath);
+        if (g_iniStamp.dwLowDateTime == 0 && g_iniStamp.dwHighDateTime == 0)
             LOG("No INI found next to the .asi - using defaults.");
-        g_cfg = Config::Load(g_iniPath);
+        g_cfg = Config::Load(g_iniPath, g_seasonsIniPath);
         g_enabled = g_cfg.enabled;
         LogConfig("Config");
 

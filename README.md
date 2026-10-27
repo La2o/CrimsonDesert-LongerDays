@@ -13,8 +13,8 @@ whole clock, it shapes the day:
   working out a multiplier. The mod reads the clock speed from the game itself,
   so the target stays accurate after a patch.
 - **Seasons (optional).** Days are longer in summer and shorter in winter
-  across the in-game year. The defaults roughly line up with
-  *Seasons of Pywel*.
+  across the in-game year. With *Seasons of Pywel* installed, it follows that
+  mod's season length (3 to 90 days) and locked season automatically.
 - **Sky stays in sync.** The sun, moon and sky follow the slowed clock.
 - **Live tuning.** Save the INI in-game and changes apply within a second. F8
   switches between this mod and vanilla, with a short on-screen note saying
@@ -93,6 +93,7 @@ the file. Some combinations:
 | Day lasts 2 real hours, night 20 min | `[RealTime]` `DayRealMinutes=120`, `NightRealMinutes=20` |
 | Long sunsets for screenshots | `[GoldenHour]` `Multiplier=4`, `LengthHours=1.5` |
 | Long summer days, short winter days | `[Seasons]` `Strength=0.4` |
+| …with 60-day seasons, without Seasons of Pywel | `[Seasons]` `Strength=0.4`, `SeasonLengthDays=60` |
 | Vanilla, but with smooth golden hours | `DayLengthMultiplier=1`, `[GoldenHour]` `Multiplier=2` |
 
 ## How it works
@@ -106,7 +107,8 @@ speed = blend(night, day × season, dawn/dusk curve) × golden-hour bump
 - **The day/night blend** uses a smoothstep curve centred on `DayStartHour` and
   `DayEndHour`.
 - **The golden hour** is a raised-cosine bump at sunrise and sunset.
-- **The season** is a cosine over the in-game year.
+- **The season** is a cosine over the in-game year: four seasons of
+  `SeasonLengthDays`, summer first from day 1, as in Seasons of Pywel.
 
 This math is in [`src/schedule.cpp`](src/schedule.cpp). It doesn't depend on the
 game, and [`tests/tests.cpp`](tests/tests.cpp) tests it.
@@ -195,11 +197,11 @@ report from a new patch contains what's needed to update
   - Seasons and their weather spells are counted in game days and hours, so
     with longer days they also last longer in real time. Pick a shorter season
     length in the Seasons menu (F5) if they feel too slow.
-  - To match Longer Days' own `[Seasons]` day length to its calendar, set
-    `Strength` above 0. The defaults `YearLengthDays=120` and
-    `SummerPeakDay=15` assume Seasons of Pywel's 30-day seasons, starting with
-    summer. With another season length, set `YearLengthDays` to 4× it and
-    `SummerPeakDay` to half of it.
+  - Longer Days' own `[Seasons]` day length (`Strength` above 0) follows
+    Seasons of Pywel's calendar on its own: with `SeasonLengthDays=0` (the
+    default) it reads the season length picked in that mod's F5 menu (3, 7,
+    14, 30, 45, 60 or 90 days) from `bin64\Seasons.ini`, and a season locked
+    there ("Fixed") holds its day length. Menu changes apply within a second.
 - **Not compatible:** other mods that change day/night speed or freeze time of
   day, such as Timescale or trainer "freeze time" options. They change the
   same values. Use only one.

@@ -96,13 +96,24 @@ static void TestRealMinutes()
 static void TestSeasons()
 {
     Config c = HardSwitch();
-    c.seasonStrength = 0.5f;
-    c.yearLengthDays = 120.0f;
-    c.summerPeakDay = 15.0f;
-    CHECK(Near(LengthAt(c, 12.0f, 15, 12.0f).length, 3.0f));  // x2 * 1.5 at midsummer
-    CHECK(Near(LengthAt(c, 12.0f, 75, 12.0f).length, 1.0f));  // x2 * 0.5 at midwinter
-    CHECK(Near(LengthAt(c, 2.0f, 75, 12.0f).length, 1.0f));   // nights unaffected
-    CHECK(Near(LengthAt(c, 12.0f, 135, 12.0f).length, 3.0f)); // next year's summer
+    c.seasonStrength = 0.5f; // 30-day seasons: summer 1-30, autumn, winter 61-90, spring
+    CHECK(Near(LengthAt(c, 12.0f, 16, 12.0f).length, 3.0f));  // x2 * 1.5 at midsummer
+    CHECK(Near(LengthAt(c, 12.0f, 76, 12.0f).length, 1.0f));  // x2 * 0.5 at midwinter
+    CHECK(Near(LengthAt(c, 2.0f, 76, 12.0f).length, 1.0f));   // nights unaffected
+    CHECK(Near(LengthAt(c, 12.0f, 136, 12.0f).length, 3.0f)); // next year's summer
+
+    // 60-day seasons, as in Seasons of Pywel's menu: a 240-day year.
+    c.seasonLengthDays = 60.0f;
+    CHECK(Near(LengthAt(c, 12.0f, 31, 12.0f).length, 3.0f, 2e-3f));  // midsummer
+    CHECK(Near(LengthAt(c, 12.0f, 91, 12.0f).length, 2.0f, 2e-2f));  // mid-autumn (day 90.5)
+    CHECK(Near(LengthAt(c, 12.0f, 151, 12.0f).length, 1.0f, 2e-3f)); // midwinter
+    CHECK(Near(LengthAt(c, 12.0f, 211, 12.0f).length, 2.0f, 2e-2f)); // mid-spring (day 210.5)
+
+    // A season locked in Seasons of Pywel holds whatever the day.
+    c.fixedSeason = 2; // winter
+    CHECK(Near(LengthAt(c, 12.0f, 31, 12.0f).length, 1.0f));
+    c.fixedSeason = 0; // summer
+    CHECK(Near(LengthAt(c, 12.0f, 151, 12.0f).length, 3.0f));
 }
 
 // The snapshot clock, against the game's own conversions (build 2.03.02).

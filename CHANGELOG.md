@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `[Seasons]` follows Seasons of Pywel: with the new `SeasonLengthDays=0`
+  (default), the season length picked in its F5 menu (3, 7, 14, 30, 45, 60 or
+  90 days) and a season locked there are read from `bin64\Seasons.ini`, and
+  menu changes apply within a second. Set `SeasonLengthDays` to 1–365 to choose
+  your own. It replaces `YearLengthDays` and `SummerPeakDay`.
 - Docs: a Compatibility section in the README, with notes for running
   alongside Seasons of Pywel.
 

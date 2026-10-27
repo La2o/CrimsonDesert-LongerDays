@@ -77,9 +77,14 @@ namespace longerdays
                 nightMult = FromRealMinutes(cfg.nightRealMinutes, nightLen, vanillaRate);
         }
 
-        if (cfg.seasonStrength > 0.0f && cfg.yearLengthDays > 0.0f)
+        if (cfg.seasonStrength > 0.0f && cfg.seasonLengthDays > 0.0f)
         {
-            const float phase = (static_cast<float>(day) - cfg.summerPeakDay) / cfg.yearLengthDays;
+            // Summer is days 1..N, so midsummer is the middle of them; a
+            // locked season sits at its own midpoint.
+            const float len = cfg.seasonLengthDays;
+            const float phase = cfg.fixedSeason >= 0
+                ? static_cast<float>(cfg.fixedSeason % 4) / 4.0f
+                : (static_cast<float>(day) - (1.0f + len) / 2.0f) / (4.0f * len);
             s.season = 1.0f + cfg.seasonStrength * std::cos(kTau * phase);
             dayMult *= s.season;
         }

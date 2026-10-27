@@ -40,7 +40,7 @@ namespace longerdays
         };
     }
 
-    Config Config::Load(const std::wstring& path)
+    Config Config::Load(const std::wstring& path, const std::wstring& seasonsPath)
     {
         const Ini ini{path};
         Config c;
@@ -70,8 +70,30 @@ namespace longerdays
 
         constexpr const wchar_t* kSeasons = L"Seasons";
         c.seasonStrength = ini.Float(kSeasons, L"Strength", c.seasonStrength, 0.0f, 0.9f);
-        c.yearLengthDays = ini.Float(kSeasons, L"YearLengthDays", c.yearLengthDays, 1.0f, 10000.0f);
-        c.summerPeakDay  = ini.Float(kSeasons, L"SummerPeakDay", c.summerPeakDay, 0.0f, 10000.0f);
+        const float seasonLength = ini.Float(kSeasons, L"SeasonLengthDays", 0.0f, 0.0f, 365.0f);
+        if (seasonLength >= 1.0f)
+        {
+            c.seasonLengthDays = seasonLength;
+        }
+        else if (GetFileAttributesW(seasonsPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+        {
+            // Follow Seasons of Pywel: the length picked in its F5 menu, and
+            // the season it is locked to in "Fixed" mode.
+            const Ini seasons{seasonsPath};
+            const int days = seasons.Int(L"Seasons", L"days_per_season", 30);
+            c.seasonLengthDays = static_cast<float>(days >= 1 && days <= 365 ? days : 30);
+            c.seasonsFromPywel = true;
+
+            wchar_t buf[64];
+            if (seasons.Raw(L"Seasons", L"mode", buf) && _wcsicmp(buf, L"fixed") == 0)
+            {
+                static const wchar_t* const kNames[] = {L"summer", L"autumn", L"winter", L"spring"};
+                c.fixedSeason = 0; // Seasons of Pywel's own default
+                if (seasons.Raw(L"Seasons", L"season", buf))
+                    for (int i = 0; i < 4; ++i)
+                        if (_wcsicmp(buf, kNames[i]) == 0) c.fixedSeason = i;
+            }
+        }
         return c;
     }
 }
