@@ -11,17 +11,19 @@ Everything for the mod page is in this folder:
 
 ## 1. Test in-game before the first upload
 
-This step is required. The mod has not been run in the game yet.
+Do this for every release, on the current game build.
 
 1. Download the build from **GitHub → Actions → Build → latest `main` run →
    Artifacts** and install it as the description explains.
 2. Load a save and play for about 15 real minutes. Then check
    `bin64\CrimsonDesertLongerDays.log`:
    - It should say `Ready.`, with no `NOT FOUND` lines.
-   - It should have hourly lines such as `Day 42 13:00 day time x2.00 slower`.
-   - After a few minutes it should say `Measured vanilla clock speed: …`.
+   - It should say `Sun sync verified: the sky follows the slowed clock.`
+   - It should have hourly lines such as
+     `Day 42 13:00 day time x2.00 slower | vanilla clock 12x | ran 6.0x real time`.
 3. Watch the sky: the sun should move at about half its usual speed during
-   the day. Press **F8** and it should speed back up to vanilla.
+   the day. Press **F8** and it should speed back up to vanilla. Hold **F7**
+   and the sun should race across the sky.
 4. Sleep or wait once, and check that the time skips normally and the sky
    follows.
 5. Take 2–4 in-game screenshots, such as a long golden sunset or a midday

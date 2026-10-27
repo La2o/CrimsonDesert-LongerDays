@@ -55,7 +55,7 @@ around *shaping* the day rather than setting one speed:
 | Smooth dawn/dusk blend | ✓ | – | – | – |
 | Longer golden hours | ✓ | – | – | – |
 | Seasonal day length | ✓ | – | – | – |
-| Targets in real time, self-measured | ✓ (minutes) | real hours per day | – | – |
+| Targets in real time, from the game's own clock speed | ✓ (minutes) | real hours per day | – | – |
 | Live INI reload | automatic on save | F10 | in-menu | in-menu |
 | Requirements | ASI loader | ASI loader | ReShade (add-on) | DesertLink |
 
