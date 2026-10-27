@@ -21,7 +21,9 @@ namespace longerdays::locate
 
     // Every plausible TimeOfDay engine global, most likely first. Which one is
     // real can only be told in-world (TodCandidates + StillMoving).
-    std::vector<uintptr_t> TodEngineGlobals();
+    // `firstIsRegistrar` says whether the first entry came from the console
+    // registrar's own init store (the game's path) rather than a fallback.
+    std::vector<uintptr_t> TodEngineGlobals(bool& firstIsRegistrar);
 
     // What the game's own /settimeofday{lower,upper}limit handlers reveal:
     // which engine virtual returns the TimeOfDay manager, and where in the
@@ -43,6 +45,7 @@ namespace longerdays::locate
         uintptr_t hourOff    = 0;
         uintptr_t lowerOff   = 0;     // upper at +4
         bool      searched   = false; // offsets found by search, not from the game's code
+        bool      viaGame    = false; // registrar global + the game's own getter and limits
         float     hour = 0, lower = 0, upper = 0; // as last read
         explicit operator bool() const { return global != 0; }
     };
@@ -50,8 +53,8 @@ namespace longerdays::locate
     // Places whose time of day agrees with the field clock right now: first
     // through the layout read from the game, then the 2.03.00 offsets, then
     // (if `search`) anywhere near them. For a background thread only.
-    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, const TodLayout& layout,
-                                          float clockHour, bool search);
+    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, bool registrarFirst,
+                                          const TodLayout& layout, float clockHour, bool search);
 
     // Re-reads candidates a few seconds later and keeps those that behave like
     // a running sun: the hour moved forward a little, the limits stayed put,

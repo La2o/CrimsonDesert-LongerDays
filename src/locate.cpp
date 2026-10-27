@@ -182,17 +182,25 @@ namespace longerdays::locate
         return {};
     }
 
-    std::vector<uintptr_t> TodEngineGlobals()
+    std::vector<uintptr_t> TodEngineGlobals(bool& firstIsRegistrar)
     {
         std::vector<uintptr_t> out;
+        firstIsRegistrar = false;
         const mem::Module& mod = mem::GameModule();
-        for (const TodGlobalSig& sig : kSig_TodEngineGlobal)
+        for (size_t i = 0; i < std::size(kSig_TodEngineGlobal); ++i)
         {
-            for (const uintptr_t hit : mem::FindAll(sig.pattern, kMaxTodCandidates))
+            const TodGlobalSig& sig = kSig_TodEngineGlobal[i];
+            const auto hits = mem::FindAll(sig.pattern, kMaxTodCandidates);
+            // The registrar's own store only counts when it is unique.
+            if (i == 0 && hits.size() != 1) continue;
+            for (const uintptr_t hit : hits)
             {
                 const uintptr_t g = RipStoreTarget(hit + sig.movOffset);
                 if (g && mod.Contains(g) && (g & 7) == 0 && std::find(out.begin(), out.end(), g) == out.end())
+                {
+                    if (i == 0) firstIsRegistrar = true;
                     out.push_back(g);
+                }
                 if (out.size() >= static_cast<size_t>(kMaxTodCandidates)) return out;
             }
         }
@@ -228,36 +236,41 @@ namespace longerdays::locate
         return mgr;
     }
 
-    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, const TodLayout& layout,
-                                          float clockHour, bool search)
+    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, bool registrarFirst,
+                                          const TodLayout& layout, float clockHour, bool search)
     {
         std::vector<TodBinding> out;
 
-        // The sun and the field clock run off different accumulators, so
-        // allow them to have drifted a little apart.
-        auto tryAt = [&](uintptr_t g, uintptr_t engine, uintptr_t managerOff, bool embedded, uintptr_t lowerOff)
+        // Until the sun is pinned it runs at vanilla speed while our clock is
+        // slowed, so the two drift apart (about an hour per 10 real minutes
+        // at x2). The game's own path doesn't need them to agree - only to be
+        // a plausible, moving time of day. Fallbacks must also agree.
+        auto tryAt = [&](uintptr_t g, uintptr_t engine, uintptr_t managerOff, bool embedded, uintptr_t lowerOff,
+                         bool viaGame)
         {
             const uintptr_t mgr = ManagerAt(engine, managerOff, embedded);
             if (!mgr || !HasGameVtable(mgr)) return false;
-            TodBinding b{g, managerOff, embedded, lowerOff - 4, lowerOff, false};
+            TodBinding b{g, managerOff, embedded, lowerOff - 4, lowerOff, false, viaGame};
             if (!ReadTriple(mgr + b.hourOff, b.hour, b.lower, b.upper) ||
-                !TodAgrees(b.hour, b.lower, b.upper, clockHour, 1.0f))
+                !TodAgrees(b.hour, b.lower, b.upper, clockHour, viaGame ? 12.0f : 1.0f))
                 return false;
             out.push_back(b);
             return true;
         };
 
-        for (const uintptr_t g : globals)
+        for (size_t i = 0; i < globals.size(); ++i)
         {
+            const uintptr_t g = globals[i];
             const uintptr_t engine = ReadPtr(g);
             if (!engine || !HasGameVtable(engine)) continue;
             // The way the game itself gets there, then the 2.03.00 layout.
             uintptr_t managerOff = 0;
             bool embedded = false;
+            const bool registrar = i == 0 && registrarFirst;
             if (layout && ManagerVia(engine, layout.slot, managerOff, embedded) &&
-                tryAt(g, engine, managerOff, embedded, layout.lowerOff))
+                tryAt(g, engine, managerOff, embedded, layout.lowerOff, registrar))
                 continue;
-            tryAt(g, engine, kOff_Tod_Manager, false, kOff_Tod_LowerLimit);
+            tryAt(g, engine, kOff_Tod_Manager, false, kOff_Tod_LowerLimit, false);
         }
         if (!out.empty() || !search) return out;
 
@@ -288,7 +301,7 @@ namespace longerdays::locate
                     // fresh objects: a real time of day has a range around it.
                     if (!TodAgrees(cur, lo, hi, clockHour, 0.5f) || hi - lo < 1.0f) continue;
                     const uintptr_t hourOff = kTodHourSearchLo + ho;
-                    out.push_back({g, kTodManagerSearchLo + mo, false, hourOff, hourOff + 4, true, cur, lo, hi});
+                    out.push_back({g, kTodManagerSearchLo + mo, false, hourOff, hourOff + 4, true, false, cur, lo, hi});
                     if (out.size() >= 64) return out;
                 }
             }
@@ -308,7 +321,8 @@ namespace longerdays::locate
             float moved = cur - b.hour;
             if (moved < -12.0f) moved += 24.0f; // midnight wrap
             const bool advanced = moved > 0.0003f && moved < 0.2f;
-            if (advanced && lo == b.lower && hi == b.upper && TodAgrees(cur, lo, hi, clockHour, 1.0f))
+            if (advanced && lo == b.lower && hi == b.upper &&
+                TodAgrees(cur, lo, hi, clockHour, b.viaGame ? 12.0f : 1.0f))
             {
                 b.hour = cur;
                 out.push_back(b);

@@ -68,6 +68,8 @@ namespace longerdays
         ULONGLONG        g_nextIniCheck = 0;
         FILETIME         g_iniStamp{};
         bool             g_keyWasDown = false;
+        bool             g_ffWasDown  = false;
+        bool             g_fastForward = false; // fast-forward key held
         int              g_lastLoggedHour = -1;
         bool             g_tickChecked = false;
 
@@ -81,6 +83,7 @@ namespace longerdays
         // never costs the game a frame, and published once via g_todReady.
         std::vector<uintptr_t> g_todGlobals;       // set before the finder starts, then read-only
         locate::TodLayout      g_todLayout{};      // likewise
+        bool                   g_todRegistrar = false; // g_todGlobals[0] is the game's own global
         locate::TodBinding     g_tod{};            // valid once g_todReady
         std::atomic<bool>      g_todReady{false};
         std::atomic<bool>      g_sunWanted{false};
@@ -266,11 +269,12 @@ namespace longerdays
             const Config& c = g_cfg;
             LOG("%s: enabled=%d | day x%.2f night x%.2f, day %.1fh-%.1fh, blend %.1fh | "
                 "golden hour x%.2f over %.1fh | real minutes day=%.0f night=%.0f | "
-                "seasons %.0f%% over %.0f days (peak day %.0f) | syncSun=%d toggleKey=0x%X showToast=%d",
+                "seasons %.0f%% over %.0f days (peak day %.0f) | syncSun=%d toggleKey=0x%X showToast=%d "
+                "fastForward=0x%X x%.0f",
                 what, c.enabled, c.dayLength, c.nightLength, c.dayStartHour, c.dayEndHour,
                 c.transitionHours, c.goldenHourMultiplier, c.goldenHourLength, c.dayRealMinutes,
                 c.nightRealMinutes, c.seasonStrength * 100.0f, c.yearLengthDays, c.summerPeakDay,
-                c.syncSun, c.toggleKey, c.showToast);
+                c.syncSun, c.toggleKey, c.showToast, c.fastForwardKey, c.fastForwardSpeed);
         }
 
         void PollIni()
@@ -289,10 +293,35 @@ namespace longerdays
             LogConfig("Config reloaded");
         }
 
+        // Hold to fast-forward. A test aid: with sun sync working, the sky
+        // races along with the clock.
+        void PollFastForward(HWND game)
+        {
+            const bool down = game && g_cfg.fastForwardKey && !g_safeMode &&
+                              (GetAsyncKeyState(g_cfg.fastForwardKey) & 0x8000);
+            if (down && !g_ffWasDown)
+            {
+                LOG("Fast-forward x%.0f (key held).", g_cfg.fastForwardSpeed);
+                if (g_cfg.showToast)
+                {
+                    wchar_t text[48];
+                    swprintf(text, 48, L"fast-forward x%.0f", g_cfg.fastForwardSpeed);
+                    toast::Show(game, text, toast::Tone::On);
+                }
+            }
+            else if (!down && g_ffWasDown)
+            {
+                LOG("Fast-forward released.");
+            }
+            g_fastForward = down;
+            g_ffWasDown = down;
+        }
+
         void PollHotkey()
         {
-            if (!g_cfg.toggleKey) return;
             const HWND game = GameWindowIfFocused();
+            PollFastForward(game);
+            if (!g_cfg.toggleKey) return;
             const bool down = game && (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000);
             if (down && !g_keyWasDown)
             {
@@ -371,6 +400,7 @@ namespace longerdays
                 // No clock, no day/night: apply the day multiplier throughout.
                 length = g_cfg.dayLength;
             }
+            if (g_fastForward) length = 1.0f / g_cfg.fastForwardSpeed;
             g_length.store(length, std::memory_order_relaxed);
 
             SyncSun(haveClock, haveClock ? clock.Hours() : 0.0f);
@@ -432,7 +462,8 @@ namespace longerdays
 
                 const float hour = g_sunClockHour.load(std::memory_order_relaxed);
                 if (attempts == 0) LOG("Sun search started (in-world, clock at %.2f).", hour);
-                const auto first = locate::TodCandidates(g_todGlobals, g_todLayout, hour, attempts >= 2);
+                const auto first = locate::TodCandidates(g_todGlobals, g_todRegistrar, g_todLayout, hour,
+                                                         attempts >= 2);
                 std::vector<locate::TodBinding> moving;
                 if (!first.empty())
                 {
@@ -440,11 +471,16 @@ namespace longerdays
                     moving = locate::StillMoving(first, g_sunClockHour.load(std::memory_order_relaxed));
                 }
 
-                // Prefer the known offsets; a searched answer must be unique.
+                // The game's own path wins; otherwise the known offsets; a
+                // searched answer must be unique.
                 const locate::TodBinding* pick = nullptr;
-                size_t known = 0;
-                for (const auto& b : moving) if (!b.searched) { ++known; pick = &b; }
-                if (known != 1) pick = (known == 0 && moving.size() == 1) ? &moving[0] : nullptr;
+                for (const auto& b : moving) if (b.viaGame) { pick = &b; break; }
+                if (!pick)
+                {
+                    size_t known = 0;
+                    for (const auto& b : moving) if (!b.searched) { ++known; pick = &b; }
+                    if (known != 1) pick = (known == 0 && moving.size() == 1) ? &moving[0] : nullptr;
+                }
 
                 if (pick)
                 {
@@ -602,13 +638,13 @@ namespace longerdays
                 "limits at +0x%llX.", g_todLayout.slot, static_cast<unsigned long long>(g_todLayout.lowerOff));
         else
             LOG("Sun layout: console handlers not found; trying the 2.03.00 layout and a search.");
-        g_todGlobals = locate::TodEngineGlobals();
+        g_todGlobals = locate::TodEngineGlobals(g_todRegistrar);
         if (g_todGlobals.empty())
             LOG("WARNING: time-of-day engine NOT FOUND - the sun will keep vanilla speed "
                 "while the clock is slowed.");
         else
-            LOG("Time-of-day engine: %zu candidate(s); the right one is picked in-world.",
-                g_todGlobals.size());
+            LOG("Time-of-day engine: %zu candidate(s)%s; the right one is picked in-world.",
+                g_todGlobals.size(), g_todRegistrar ? ", the console registrar's first" : "");
         const bool findSun = !g_todGlobals.empty();
 
         if (MH_Initialize() != MH_OK)

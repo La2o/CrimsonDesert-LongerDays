@@ -18,7 +18,8 @@ whole clock, it shapes the day:
 - **Sky stays in sync.** The sun, moon and sky follow the slowed clock.
 - **Live tuning.** Save the INI in-game and changes apply within a second. F8
   switches between this mod and vanilla, with a short on-screen note saying
-  which one is active (borderless or windowed mode).
+  which one is active (borderless or windowed mode). Hold F7 to fast-forward
+  time (x30), for example to watch a whole sunset in seconds.
 - **Hourly log.** The log shows how much time is slowed each in-game hour and
   why.
 - **Built to survive game updates.** Each piece of game code is found by

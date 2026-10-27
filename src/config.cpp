@@ -56,6 +56,9 @@ namespace longerdays
         c.toggleKey       = ini.Int(kMain, L"ToggleKey", c.toggleKey);
         if (c.toggleKey < 0 || c.toggleKey > 0xFE) c.toggleKey = 0;
         c.showToast       = ini.Int(kMain, L"ShowToast", c.showToast) != 0;
+        c.fastForwardKey  = ini.Int(kMain, L"FastForwardKey", c.fastForwardKey);
+        if (c.fastForwardKey < 0 || c.fastForwardKey > 0xFE) c.fastForwardKey = 0;
+        c.fastForwardSpeed = ini.Float(kMain, L"FastForwardSpeed", c.fastForwardSpeed, 2.0f, 200.0f);
 
         constexpr const wchar_t* kGolden = L"GoldenHour";
         c.goldenHourMultiplier = ini.Float(kGolden, L"Multiplier", c.goldenHourMultiplier, 0.25f, 10.0f);

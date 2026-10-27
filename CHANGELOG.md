@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hold **F7** to fast-forward time (x30 by default; `FastForwardKey`,
+  `FastForwardSpeed`). Handy for watching a sunset in seconds or checking
+  that the sky follows the clock.
 - Pressing F8 briefly shows "Longer Days: ON" or "OFF" near the top of the
   screen (borderless and windowed mode). Turn it off with `ShowToast=0`.
 - The mod no longer loads into the game's crash reporter

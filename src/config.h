@@ -16,6 +16,8 @@ namespace longerdays
         bool  syncSun      = true;
         int   toggleKey    = 0x77; // VK_F8; 0 disables the hotkey
         bool  showToast    = true; // on-screen ON/OFF note when the hotkey is pressed
+        int   fastForwardKey   = 0x76;  // VK_F7, held; 0 disables
+        float fastForwardSpeed = 30.0f; // how many times faster time runs while held
 
         // [GoldenHour] - sunrise and sunset linger on top of the day/night speed
         float goldenHourMultiplier = 1.5f; // 1.0 = off
