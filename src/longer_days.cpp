@@ -87,6 +87,7 @@ namespace longerdays
         std::atomic<bool>      g_sunWanted{false};
         std::atomic<float>     g_sunClockHour{0.0f};
         std::atomic<uint32_t>  g_clockMoves{0};    // clock changes seen; in-world once it climbs
+        std::atomic<uint32_t>  g_reanchorEpoch{0}; // bumped when the game re-anchors (save load, sleep)
         bool                   g_sunBroken = false; // pinning didn't take; off for the session
 
         bool      g_clampApplied = false;
@@ -193,12 +194,19 @@ namespace longerdays
             g_lastNow = raw;
 
             // Did the game re-anchor the clock itself (load, sleep, sync)?
+            // Mid-load the snapshot briefly holds junk; that is not one.
             const uint64_t stamp = static_cast<uint64_t>(*StampOf(g_ft.client));
-            if (g_expectStamp && stamp != g_expectStamp && ++g_reanchors <= 5)
+            if (g_expectStamp && stamp != g_expectStamp)
             {
                 const Snapshot s = ReadSnapshot(g_ft.client);
-                LOG("The game re-anchored the clock at Day %u %02u:%02u:%02u (rate %u)%s.", s.day, s.hour,
-                    s.minute, s.second, s.rate, g_reanchors == 5 ? "; not logging further ones" : "");
+                if (gametime::Plausible(s))
+                {
+                    g_reanchorEpoch.fetch_add(1, std::memory_order_relaxed);
+                    if (++g_reanchors <= 5)
+                        LOG("The game re-anchored the clock at Day %u %02u:%02u:%02u (rate %u)%s.", s.day,
+                            s.hour, s.minute, s.second, s.rate,
+                            g_reanchors == 5 ? "; not logging further ones" : "");
+                }
             }
 
             if (dt > 0 && dt <= kMaxSteerStepMs)
@@ -508,10 +516,29 @@ namespace longerdays
             constexpr int kGiveUpAfter   = 10; // ~1 minute, then retry every 30 s
             int attempts = 0;
             bool reportedAmbiguous = false;
+            uint32_t epoch = g_reanchorEpoch.load(std::memory_order_relaxed);
             for (;;)
             {
-                Sleep(attempts >= kGiveUpAfter ? 30000 : 2000);
+                // Wait in short steps so a save load is picked up at once.
+                for (int waited = 0; waited < (attempts >= kGiveUpAfter ? 30000 : 2000); waited += 500)
+                {
+                    if (g_reanchorEpoch.load(std::memory_order_relaxed) != epoch) break;
+                    Sleep(500);
+                }
                 if (g_safeMode.load()) break;
+
+                // A save just loaded (often after tries in the main menu, whose
+                // sky stands still): start over with a fresh count.
+                const uint32_t nowEpoch = g_reanchorEpoch.load(std::memory_order_relaxed);
+                if (nowEpoch != epoch)
+                {
+                    epoch = nowEpoch;
+                    if (attempts > 0)
+                        LOG("Sun search restarted: the game re-anchored the clock (save loaded).");
+                    attempts = 0;
+                    reportedAmbiguous = false;
+                    Sleep(2000); // let the world settle
+                }
                 if (!g_sunWanted.load(std::memory_order_relaxed) ||
                     g_clockMoves.load(std::memory_order_relaxed) < 3)
                     continue; // menu, loading, paused, or sun sync off
