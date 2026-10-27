@@ -83,6 +83,45 @@ namespace longerdays::locate
             return true;
         }
 
+        // Decodes a trivial field getter: `mov rax,[rcx+d]` or `lea rax,[rcx+d]`
+        // followed by ret, optionally behind one jmp thunk.
+        bool DecodeGetter(uintptr_t fn, uintptr_t& off, bool& embedded)
+        {
+            const mem::Module& mod = mem::GameModule();
+            for (int hop = 0; hop < 2 && mod.Contains(fn); ++hop)
+            {
+                uint8_t b[8];
+                if (!SafeRead(fn, b, sizeof(b))) return false;
+                if (b[0] == 0xE9) // jmp rel32 thunk
+                {
+                    int32_t rel;
+                    std::memcpy(&rel, b + 1, 4);
+                    fn = fn + 5 + rel;
+                    continue;
+                }
+                if (b[0] != 0x48 || (b[1] != 0x8B && b[1] != 0x8D)) return false;
+                embedded = b[1] == 0x8D;
+                if (b[2] == 0x81 && b[7] == 0xC3) { int32_t d; std::memcpy(&d, b + 3, 4); off = static_cast<uintptr_t>(d); return d >= 0; }
+                if (b[2] == 0x41 && b[4] == 0xC3) { off = b[3]; return true; }
+                return false;
+            }
+            return false;
+        }
+
+        // Manager behind `engine` via the getter in its vtable at `slot`.
+        bool ManagerVia(uintptr_t engine, int slot, uintptr_t& managerOff, bool& embedded)
+        {
+            uintptr_t vt = 0, fn = 0;
+            if (!SafeRead(engine, &vt, 8) || !mem::GameModule().Contains(vt)) return false;
+            if (!SafeRead(vt + static_cast<uintptr_t>(slot), &fn, 8)) return false;
+            return DecodeGetter(fn, managerOff, embedded);
+        }
+
+        uintptr_t ManagerAt(uintptr_t engine, uintptr_t managerOff, bool embedded)
+        {
+            return embedded ? engine + managerOff : ReadPtr(engine + managerOff);
+        }
+
         // The `mov cs:<global>, reg` at `p`, if that's what it is.
         uintptr_t RipStoreTarget(uintptr_t p)
         {
@@ -160,32 +199,65 @@ namespace longerdays::locate
         return out;
     }
 
+    TodLayout LocateTodLayout()
+    {
+        const auto hits = mem::FindAll(kSig_TodLimitHandler, 4);
+        if (hits.size() != 2) return {};
+        int slot[2];
+        int32_t lim[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            const auto* p = reinterpret_cast<const uint8_t*>(hits[i]);
+            slot[i] = p[kOff_TodLimitHandler_Slot];
+            std::memcpy(&lim[i], p + kOff_TodLimitHandler_Limit, 4);
+        }
+        // One handler writes lower, its twin upper = lower + 4, via one getter.
+        const int32_t lo = std::min(lim[0], lim[1]), hi = std::max(lim[0], lim[1]);
+        if (slot[0] != slot[1] || slot[0] == 0 || (slot[0] & 7) || hi != lo + 4 || lo < 4 || lo > 0x10000)
+            return {};
+        return {slot[0], static_cast<uintptr_t>(lo)};
+    }
+
     uintptr_t TodManager(const TodBinding& b)
     {
         if (!b) return 0;
         const uintptr_t engine = ReadPtr(b.global);
         if (!engine) return 0;
-        const uintptr_t mgr = ReadPtr(engine + b.managerOff);
-        if (!mgr || !mem::IsWritable(mgr + b.hourOff, 12)) return 0;
+        const uintptr_t mgr = ManagerAt(engine, b.managerOff, b.embedded);
+        if (!mgr || !mem::IsWritable(mgr + b.hourOff, 4) || !mem::IsWritable(mgr + b.lowerOff, 8)) return 0;
         return mgr;
     }
 
-    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, float clockHour, bool search)
+    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, const TodLayout& layout,
+                                          float clockHour, bool search)
     {
         std::vector<TodBinding> out;
 
-        // Known offsets. The sun and the field clock run off different
-        // accumulators, so allow them to have drifted a little apart.
+        // The sun and the field clock run off different accumulators, so
+        // allow them to have drifted a little apart.
+        auto tryAt = [&](uintptr_t g, uintptr_t engine, uintptr_t managerOff, bool embedded, uintptr_t lowerOff)
+        {
+            const uintptr_t mgr = ManagerAt(engine, managerOff, embedded);
+            if (!mgr || !HasGameVtable(mgr)) return false;
+            TodBinding b{g, managerOff, embedded, lowerOff - 4, lowerOff, false};
+            if (!ReadTriple(mgr + b.hourOff, b.hour, b.lower, b.upper) ||
+                !TodAgrees(b.hour, b.lower, b.upper, clockHour, 1.0f))
+                return false;
+            out.push_back(b);
+            return true;
+        };
+
         for (const uintptr_t g : globals)
         {
             const uintptr_t engine = ReadPtr(g);
             if (!engine || !HasGameVtable(engine)) continue;
-            const uintptr_t mgr = ReadPtr(engine + kOff_Tod_Manager);
-            if (!mgr || !HasGameVtable(mgr)) continue;
-            TodBinding b{g, kOff_Tod_Manager, kOff_Tod_CurrentHour, false};
-            if (ReadTriple(mgr + b.hourOff, b.hour, b.lower, b.upper) &&
-                TodAgrees(b.hour, b.lower, b.upper, clockHour, 1.0f))
-                out.push_back(b);
+            // The way the game itself gets there, then the 2.03.00 layout.
+            uintptr_t managerOff = 0;
+            bool embedded = false;
+            if (layout && ManagerVia(engine, layout.slot, managerOff, embedded) &&
+                tryAt(g, engine, managerOff, embedded, layout.lowerOff))
+                continue;
+            tryAt(g, engine, kOff_Tod_Manager, false, kOff_Tod_LowerLimit);
         }
         if (!out.empty() || !search) return out;
 
@@ -215,7 +287,8 @@ namespace longerdays::locate
                     // Tighter here, and skip the all-equal noise common in
                     // fresh objects: a real time of day has a range around it.
                     if (!TodAgrees(cur, lo, hi, clockHour, 0.5f) || hi - lo < 1.0f) continue;
-                    out.push_back({g, kTodManagerSearchLo + mo, kTodHourSearchLo + ho, true, cur, lo, hi});
+                    const uintptr_t hourOff = kTodHourSearchLo + ho;
+                    out.push_back({g, kTodManagerSearchLo + mo, false, hourOff, hourOff + 4, true, cur, lo, hi});
                     if (out.size() >= 64) return out;
                 }
             }
@@ -244,25 +317,32 @@ namespace longerdays::locate
         return out;
     }
 
-    void LogTodDiagnostics(const std::vector<uintptr_t>& globals, float clockHour)
+    void LogTodDiagnostics(const std::vector<uintptr_t>& globals, const TodLayout& layout, float clockHour)
     {
         const mem::Module& mod = mem::GameModule();
-        LOG("Sun diagnostics: clock hour %.3f, %zu engine candidate(s). Known chain "
-            "(engine+0x%llX -> manager+0x%llX) for those with a game object behind them:",
-            clockHour, globals.size(), static_cast<unsigned long long>(kOff_Tod_Manager),
-            static_cast<unsigned long long>(kOff_Tod_CurrentHour));
+        LOG("Sun diagnostics: clock hour %.3f, %zu engine candidate(s), layout from game code: %s "
+            "(getter slot 0x%X, lower limit +0x%llX).", clockHour, globals.size(),
+            layout ? "yes" : "no", layout.slot, static_cast<unsigned long long>(layout.lowerOff));
         int shown = 0;
         for (const uintptr_t g : globals)
         {
             const uintptr_t engine = ReadPtr(g);
             if (!engine || !HasGameVtable(engine)) continue;
-            const uintptr_t mgr = ReadPtr(engine + kOff_Tod_Manager);
+            uintptr_t managerOff = kOff_Tod_Manager, lowerOff = kOff_Tod_LowerLimit;
+            bool embedded = false, viaGetter = false;
+            if (layout && ManagerVia(engine, layout.slot, managerOff, embedded))
+            {
+                viaGetter = true;
+                lowerOff = layout.lowerOff;
+            }
+            const uintptr_t mgr = ManagerAt(engine, managerOff, embedded);
             float cur = NAN, lo = NAN, hi = NAN;
             const bool objOk = mgr && HasGameVtable(mgr);
-            if (objOk) ReadTriple(mgr + kOff_Tod_CurrentHour, cur, lo, hi);
-            LOG("  exe+0x%llX: manager %s, hour %.3f limits %.3f..%.3f",
-                static_cast<unsigned long long>(g - mod.base),
-                !mgr ? "null" : objOk ? "ok" : "not an object", cur, lo, hi);
+            if (objOk) ReadTriple(mgr + lowerOff - 4, cur, lo, hi);
+            LOG("  exe+0x%llX: manager %s at engine%s0x%llX (%s), hour %.3f limits %.3f..%.3f",
+                static_cast<unsigned long long>(g - mod.base), !mgr ? "null" : objOk ? "ok" : "not an object",
+                embedded ? "+" : "->+", static_cast<unsigned long long>(managerOff),
+                viaGetter ? "game getter" : "2.03.00 offset", cur, lo, hi);
             if (++shown >= 12) break;
         }
         if (!shown) LOG("  (no candidate points at a game object yet)");

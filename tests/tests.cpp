@@ -232,6 +232,30 @@ static void TestSigTools()
     CHECK(Near(mem::HourDistance(12.25f, 12.0f), 0.25f));
 }
 
+// The game's /settimeofdaylowerlimit handler in build 1.0.0.2976: it gets the
+// TimeOfDay manager through engine vtable+0x60 and stores the lower limit at
+// +0x3B4. The mod reads both numbers from here instead of hard-coding them.
+static const uint8_t kLowerLimitHandler2976[] = {
+    0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x83, 0x7A, 0x08, 0x02, 0x48, 0x8B, 0xFA, 0x72, 0x2F, 0x48,
+    0x8B, 0x09, 0x48, 0x89, 0x5C, 0x24, 0x30, 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x60, 0x48, 0x8B, 0x0F,
+    0x48, 0x8B, 0xD8, 0x48, 0x8B, 0x49, 0x08, 0xFF, 0x15, 0x9B, 0x66, 0x86, 0x01, 0xC5, 0xFB, 0x5A,
+    0xC8, 0xC5, 0xFA, 0x11, 0x8B, 0xB4, 0x03, 0x00, 0x00, 0x48, 0x8B, 0x5C, 0x24, 0x30, 0x48, 0x83,
+    0xC4, 0x20, 0x5F, 0xC3};
+
+static void TestTodLimitHandler()
+{
+    const uint8_t* b = kLowerLimitHandler2976;
+    const uint8_t* e = b + sizeof(kLowerLimitHandler2976);
+    auto p = mem::BytePattern::Parse(offsets::kSig_TodLimitHandler);
+    const uint8_t* hit = p ? p->Find(b, e) : nullptr;
+    CHECK(hit != nullptr);
+    if (!hit) return;
+    CHECK(hit[offsets::kOff_TodLimitHandler_Slot] == 0x60);
+    int32_t lower = 0;
+    std::memcpy(&lower, hit + offsets::kOff_TodLimitHandler_Limit, 4);
+    CHECK(lower == 0x3B4);
+}
+
 int main()
 {
     TestDayNight();
@@ -244,6 +268,7 @@ int main()
     TestPattern();
     TestTickSignatures();
     TestSigTools();
+    TestTodLimitHandler();
     std::printf(g_failures ? "%d failure(s)\n" : "all tests passed\n", g_failures);
     return g_failures;
 }

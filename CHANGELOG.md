@@ -17,7 +17,11 @@
 - The log names the game build and which signature matched each target.
 - Fixed periodic stutter: the sun search now runs on a background thread,
   reads memory in blocks and only starts once you're in the world.
-- Sun finding for 2.03.02: every static-init store is now a candidate. A
+- Sun layout for 2.03.02 is read from the game's own time-of-day limit
+  console handlers (manager getter at vtable+0x60, limits at +0x3B4), and the
+  engine global from the console registrar's init store. 2.03.00's
+  +0x2F8/+0x3D4 layout stays as a fallback.
+- Sun finding fallback: every other static-init store is a candidate. A
   candidate is used only if its time of day agrees with the clock and keeps
   moving like a sun a few seconds later. If none qualifies, the log gets a
   diagnostic block.

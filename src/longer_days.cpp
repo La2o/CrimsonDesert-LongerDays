@@ -80,6 +80,7 @@ namespace longerdays
         // Sun. Found by a background thread (SunFinderThread) so the search
         // never costs the game a frame, and published once via g_todReady.
         std::vector<uintptr_t> g_todGlobals;       // set before the finder starts, then read-only
+        locate::TodLayout      g_todLayout{};      // likewise
         locate::TodBinding     g_tod{};            // valid once g_todReady
         std::atomic<bool>      g_todReady{false};
         std::atomic<bool>      g_sunWanted{false};
@@ -141,8 +142,8 @@ namespace longerdays
                     toast::Show(w, toastText, toast::Tone::Warning);
         }
 
-        uintptr_t LowerLimit(uintptr_t mgr) { return mgr + g_tod.hourOff + 4; }
-        uintptr_t UpperLimit(uintptr_t mgr) { return mgr + g_tod.hourOff + 8; }
+        uintptr_t LowerLimit(uintptr_t mgr) { return mgr + g_tod.lowerOff; }
+        uintptr_t UpperLimit(uintptr_t mgr) { return mgr + g_tod.lowerOff + 4; }
 
         void ReleaseSun(uintptr_t mgr)
         {
@@ -429,7 +430,7 @@ namespace longerdays
                     continue; // menu, loading, paused, or sun sync off
 
                 const float hour = g_sunClockHour.load(std::memory_order_relaxed);
-                const auto first = locate::TodCandidates(g_todGlobals, hour, attempts >= 2);
+                const auto first = locate::TodCandidates(g_todGlobals, g_todLayout, hour, attempts >= 2);
                 std::vector<locate::TodBinding> moving;
                 if (!first.empty())
                 {
@@ -455,8 +456,11 @@ namespace longerdays
                             static_cast<unsigned long long>(g_tod.managerOff),
                             static_cast<unsigned long long>(g_tod.hourOff));
                     else
-                        LOG("Sun found (exe+0x%llX): its time of day agrees with the clock and is moving.",
-                            static_cast<unsigned long long>(g_tod.global - mod.base));
+                        LOG("Sun found (exe+0x%llX, manager at engine%s0x%llX, limits at +0x%llX): its "
+                            "time of day agrees with the clock and is moving.",
+                            static_cast<unsigned long long>(g_tod.global - mod.base),
+                            g_tod.embedded ? "+" : "->+", static_cast<unsigned long long>(g_tod.managerOff),
+                            static_cast<unsigned long long>(g_tod.lowerOff));
                     break;
                 }
                 if (moving.size() > 1 && !reportedAmbiguous)
@@ -469,7 +473,7 @@ namespace longerdays
                     LOG("WARNING: could not find the sun's time of day (or another mod is controlling "
                         "it). The clock still slows down; the sky keeps vanilla speed. Still looking "
                         "every 30 s.");
-                    locate::LogTodDiagnostics(g_todGlobals, hour);
+                    locate::LogTodDiagnostics(g_todGlobals, g_todLayout, hour);
                 }
             }
             FreeLibraryAndExitThread(self, 0);
@@ -586,6 +590,12 @@ namespace longerdays
                 "real-time targets and sun sync are off; DayLengthMultiplier applies around the clock.");
         }
 
+        g_todLayout = locate::LocateTodLayout();
+        if (g_todLayout)
+            LOG("Sun layout read from the game's console handlers: manager getter at vtable+0x%X, "
+                "limits at +0x%llX.", g_todLayout.slot, static_cast<unsigned long long>(g_todLayout.lowerOff));
+        else
+            LOG("Sun layout: console handlers not found; trying the 2.03.00 layout and a search.");
         g_todGlobals = locate::TodEngineGlobals();
         if (g_todGlobals.empty())
             LOG("WARNING: time-of-day engine NOT FOUND - the sun will keep vanilla speed "

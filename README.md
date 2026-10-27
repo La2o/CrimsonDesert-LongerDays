@@ -150,8 +150,13 @@ the feature and wildcard what a recompile tends to shuffle:
   but not the body one.
 - **Field clock:** the realm-select read, with and without the TLS slot and
   branch lengths.
-- **Sun:** every static-init store of a global is a candidate, with the exact
-  2.03.00 shape tried first. A background thread waits until you're in the
+- **Sun:** the layout is read from the game's own `/settimeofdaylowerlimit`
+  and `/settimeofdayupperlimit` console handlers: which engine virtual returns
+  the TimeOfDay manager, and where its limits are. The getter that virtual
+  points at is decoded for the manager's field. In 2.03.02 that is vtable
+  `+0x60` and limits at `+0x3B4`, where 2.03.00 used `+0x2F8` and `+0x3D4`.
+  The engine global comes from the console registrar's init store. Every
+  other static-init store is a fallback candidate. A background thread waits until you're in the
   world. It then keeps the candidates whose time of day agrees with the field
   clock and, 4 seconds later, has moved forward like a running sun while its
   limits stayed put. The known struct offsets are tried first; if they stop
@@ -209,7 +214,12 @@ cmake --build build-tests && ctest --test-dir build-tests
 
 - The signatures and offsets for the game's clock and time of day come from the
   open-source [Trinity](https://github.com/XeTrinityz/Trinity) by XeTrinityz
-  (MIT). Everything else here was written for this mod.
+  (MIT).
+- The 2.03.02 sun layout was located with the help of the research notes in
+  [crimson-workbench](https://github.com/ArasHueseyin/crimson-workbench)
+  (`docs/research/LIVE_TIME_WEATHER.md`), which identify the console handlers
+  and their new limit offsets. No code was taken from it.
+- Everything else here was written for this mod.
 - Hooking: [MinHook](https://github.com/TsudaKageyu/minhook).
 
 Not affiliated with or endorsed by Pearl Abyss.

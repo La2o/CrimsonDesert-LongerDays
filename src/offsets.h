@@ -84,23 +84,42 @@ namespace longerdays::offsets
     // lower == upper == the field clock's hour makes the sun follow our clock.
     //
     //   engine  = *engineGlobal
-    //   manager = *(engine + 0x2F8)
-    //   manager + 0x3D0  f32 currentTimeOfDay (hours 0..24)
-    //   manager + 0x3D4  f32 lowerLimit
-    //   manager + 0x3D8  f32 upperLimit
+    //   manager = engine->vfunc[slot]()       (a plain field getter)
+    //   manager + lower - 4  f32 currentTimeOfDay (hours 0..24)
+    //   manager + lower      f32 lowerLimit
+    //   manager + lower + 4  f32 upperLimit
     //
-    // engineGlobal is the RIP target of the one-time init store
-    //   cmp cs:<guard>, -1 ; jnz ; mov cs:<engineGlobal>, rbx ; mov cs:<..>, rdi
-    // That shape is MSVC's thread-safe static init and occurs hundreds of
-    // times, and 2.03.02 no longer matches the exact 2.03.00 bytes. So every
-    // such store is a candidate (exact shape first), and the live game picks
-    // the one whose sun agrees with - and moves like - the field clock.
+    //   build      slot   getter field   lower
+    //   2.03.00    0x40   +0x2F8         0x3D4
+    //   2.03.02    0x60   (read live)    0x3B4
+    //
+    // Rather than hard-code the 2.03.02 column, the mod reads it from the
+    // game's own console handlers for those commands, which do exactly
+    //   mov rcx,[rcx] ; mov rax,[rcx] ; call [rax+slot] ; ... ;
+    //   vmovss [rax+lower], xmm1          (and +upper in the twin handler)
+    // and decodes the getter the slot points at. Both handlers must agree.
+    inline constexpr const char* kSig_TodLimitHandler =
+        "48 8B 01 FF 50 ?? 48 8B 0F 48 8B D8 48 8B 49 08 FF 15 ?? ?? ?? ?? "
+        "C5 FB 5A C8 C5 FA 11 8B ?? ?? ?? ??";
+    inline constexpr int kOff_TodLimitHandler_Slot  = 5;  // disp8 of `call [rax+slot]`
+    inline constexpr int kOff_TodLimitHandler_Limit = 30; // disp32 of the vmovss store
+
+    // engineGlobal is set once by the console registrar's thread-safe static
+    // init:
+    //   cmp cs:<guard>, -1 ; jnz ; mov cs:<engineGlobal>, rsi ;
+    //   mov cs:<..>, rbx ; mov rax, [rbx] ; mov rdx, [rax+28h]      (2.03.02)
+    // 2.03.00 stored rbx/rdi instead. Trinity's exact shape now matches an
+    // unrelated initializer, so the registrar shape goes first, then every
+    // static-init store as a fallback candidate; the live game picks the one
+    // whose sun agrees with - and moves like - the field clock.
     struct TodGlobalSig
     {
         const char* pattern;
         int         movOffset; // where the `mov cs:<global>, reg` starts in the match
     };
     inline constexpr TodGlobalSig kSig_TodEngineGlobal[] = {
+        {"83 3D ?? ?? ?? ?? FF 75 ?? 48 89 ?? ?? ?? ?? ?? 48 89 ?? ?? ?? ?? ?? "
+         "48 8B ?? 48 8B 50 28", 9},                                     // console registrar
         {"83 3D ?? ?? ?? ?? FF 75 ?? 48 89 1D ?? ?? ?? ?? 48 89 3D", 9}, // exact, 2.03.00
         {"83 3D ?? ?? ?? ?? FF 75 ??", 9},                               // short jnz, any store
         {"83 3D ?? ?? ?? ?? FF 0F 85 ?? ?? ?? ??", 13},                  // long jnz, any store
@@ -109,8 +128,8 @@ namespace longerdays::offsets
     inline constexpr int kMaxTodCandidates        = 4096;
     inline constexpr int kMaxTodSearchGlobals     = 256; // deep search is costlier
 
-    // Known field offsets (2.03.00), tried first. If they stop making sense
-    // after an update, the manager is searched for them (see locate.cpp).
+    // 2.03.00 field offsets: the fallback when the handlers can't be read.
+    // If nothing makes sense, the manager is searched (see locate.cpp).
     inline constexpr uintptr_t kOff_Tod_Manager     = 0x2F8;
     inline constexpr uintptr_t kOff_Tod_CurrentHour = 0x3D0;
     inline constexpr uintptr_t kOff_Tod_LowerLimit  = 0x3D4; // CurrentHour + 4
