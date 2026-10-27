@@ -19,8 +19,8 @@ namespace longerdays::locate
     // The client-realm {day, hour, minute, second} global.
     Hit FieldClock();
 
-    // Every plausible TimeOfDay engine global. Which one is real can only be
-    // told in-world, by BindTod.
+    // Every plausible TimeOfDay engine global, most likely first. Which one is
+    // real can only be told in-world (TodCandidates + StillMoving).
     std::vector<uintptr_t> TodEngineGlobals();
 
     // How to reach the TimeOfDay manager's hour and limits.
@@ -28,15 +28,25 @@ namespace longerdays::locate
     {
         uintptr_t global     = 0;
         uintptr_t managerOff = 0;
-        uintptr_t hourOff    = 0;  // lower limit at +4, upper at +8
+        uintptr_t hourOff    = 0;     // lower limit at +4, upper at +8
         bool      searched   = false; // offsets found by search, not the known ones
+        float     hour = 0, lower = 0, upper = 0; // as last read
         explicit operator bool() const { return global != 0; }
     };
 
-    // Picks the candidate whose visible time of day agrees with the field
-    // clock (`clockHour`), first at the known offsets, then by searching the
-    // engine and manager objects. False if nothing agrees (yet).
-    bool BindTod(const std::vector<uintptr_t>& globals, float clockHour, TodBinding& out);
+    // Places whose time of day agrees with the field clock right now: first
+    // at the known offsets, then (if `search`) anywhere near them. Cheap
+    // enough for a background thread; never call it on the game thread.
+    std::vector<TodBinding> TodCandidates(const std::vector<uintptr_t>& globals, float clockHour, bool search);
+
+    // Re-reads candidates a few seconds later and keeps those that behave like
+    // a running sun: the hour moved forward a little, the limits stayed put,
+    // and it still agrees with the clock.
+    std::vector<TodBinding> StillMoving(const std::vector<TodBinding>& before, float clockHour);
+
+    // Logs what the known chain reads for the first few candidates, for bug
+    // reports when the sun can't be found.
+    void LogTodDiagnostics(const std::vector<uintptr_t>& globals, float clockHour);
 
     // The live manager for a binding, or 0 (not in-world, or torn down).
     uintptr_t TodManager(const TodBinding& b);

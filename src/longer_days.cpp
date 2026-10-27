@@ -77,12 +77,14 @@ namespace longerdays
         bool      g_clockStale = false;
         constexpr double kStaleAfterAppliedSeconds = 90.0; // ~18 vanilla game minutes
 
-        // Sun: which candidate/offsets drive it, and whether pinning works.
-        std::vector<uintptr_t> g_todGlobals;
-        locate::TodBinding     g_tod{};
-        ULONGLONG              g_nextTodBind = 0;
-        int                    g_todBindTries = 0;
-        bool                   g_todGaveUp = false;
+        // Sun. Found by a background thread (SunFinderThread) so the search
+        // never costs the game a frame, and published once via g_todReady.
+        std::vector<uintptr_t> g_todGlobals;       // set before the finder starts, then read-only
+        locate::TodBinding     g_tod{};            // valid once g_todReady
+        std::atomic<bool>      g_todReady{false};
+        std::atomic<bool>      g_sunWanted{false};
+        std::atomic<float>     g_sunClockHour{0.0f};
+        std::atomic<uint32_t>  g_clockMoves{0};    // clock changes seen; in-world once it climbs
         bool                   g_sunBroken = false; // pinning didn't take; off for the session
 
         bool      g_clampApplied = false;
@@ -155,45 +157,16 @@ namespace longerdays
             g_clampMgr = 0;
         }
 
-        // Find which TimeOfDay manager (and where in it) the sun lives, by
-        // asking which candidate agrees with the field clock. Throttled; gives
-        // up loudly once, then keeps retrying quietly in case a later area
-        // load brings it up.
-        void TryBindTod(float clockHour)
-        {
-            const ULONGLONG now = GetTickCount64();
-            if (now < g_nextTodBind || g_todGlobals.empty()) return;
-            g_nextTodBind = now + (g_todGaveUp ? 10000 : 2000);
-
-            if (locate::BindTod(g_todGlobals, clockHour, g_tod))
-            {
-                if (g_tod.searched)
-                    LOG("Sun found by search: manager at engine+0x%llX, time of day at +0x%llX "
-                        "(the game moved these; the known offsets no longer match).",
-                        static_cast<unsigned long long>(g_tod.managerOff),
-                        static_cast<unsigned long long>(g_tod.hourOff));
-                else
-                    LOG("Sun found (time of day agrees with the clock).");
-                return;
-            }
-            if (!g_todGaveUp && ++g_todBindTries >= 30)
-            {
-                g_todGaveUp = true;
-                LOG("WARNING: could not find the sun's time of day in-world (or another mod is "
-                    "controlling it). The clock still slows down; the sky keeps vanilla speed.");
-            }
-        }
-
         // Pin the visible sun to the field clock: lower == upper == clock hour,
         // which the render manager clamps currentTimeOfDay into every frame.
         // If the sun doesn't follow within a few seconds, let go for good.
         void SyncSun(bool haveClock, float hour)
         {
-            const bool want = !g_safeMode && g_enabled && g_cfg.syncSun && haveClock && !g_sunBroken;
-            if (want && !g_tod) TryBindTod(hour);
+            const bool want = !g_safeMode && g_enabled && g_cfg.syncSun && !g_sunBroken;
+            g_sunWanted.store(want, std::memory_order_relaxed);
 
-            const uintptr_t mgr = locate::TodManager(g_tod);
-            if (!want || !mgr)
+            const uintptr_t mgr = g_todReady.load(std::memory_order_acquire) ? locate::TodManager(g_tod) : 0;
+            if (!want || !haveClock || !mgr)
             {
                 if (g_clampApplied) ReleaseSun(mgr);
                 return;
@@ -233,7 +206,7 @@ namespace longerdays
         {
             g_safeMode.store(true);
             g_length.store(1.0f, std::memory_order_relaxed);
-            ReleaseSun(locate::TodManager(g_tod));
+            if (g_todReady.load()) ReleaseSun(locate::TodManager(g_tod));
             LOG("SAFE MODE: %s. Longer Days has stopped changing anything; the game runs at "
                 "vanilla speed. A game update probably changed this code - please report the log.", why);
             Warn(L"paused: game update not supported yet (see log)");
@@ -263,6 +236,7 @@ namespace longerdays
             const int64_t secs = c.TotalSeconds();
             if (secs != g_lastClockSeconds)
             {
+                if (g_lastClockSeconds >= 0) g_clockMoves.fetch_add(1, std::memory_order_relaxed);
                 if (g_clockStale)
                     LOG("The clock is moving again; dawn/dusk, golden hour and seasons are back on.");
                 g_lastClockSeconds = secs;
@@ -386,6 +360,7 @@ namespace longerdays
             float length = 1.0f;
             if (haveClock)
             {
+                g_sunClockHour.store(clock.Hours(), std::memory_order_relaxed);
                 const SpeedSample s = LengthAt(g_cfg, clock.Hours(), clock.day, VanillaRate());
                 if (g_enabled) length = s.length;
                 LogHourly(clock, s);
@@ -430,6 +405,74 @@ namespace longerdays
 
             g_origTick(mgr, delta, unused);
             AfterTick();
+        }
+
+        // Finds the sun off the game thread. Waits until the clock is running
+        // in-world, then looks for a TimeOfDay that agrees with the clock and,
+        // a few seconds later, has moved like one. Only then is it used.
+        DWORD WINAPI SunFinderThread(LPVOID)
+        {
+            // Runs code in this DLL, so it keeps the DLL loaded while it runs.
+            HMODULE self = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                               reinterpret_cast<LPCWSTR>(&SunFinderThread), &self);
+
+            constexpr int kDiagnoseAfter = 10; // in-world attempts (~1 minute)
+            int attempts = 0;
+            bool reportedAmbiguous = false;
+            for (;;)
+            {
+                Sleep(attempts >= kDiagnoseAfter ? 30000 : 2000);
+                if (g_safeMode.load()) break;
+                if (!g_sunWanted.load(std::memory_order_relaxed) ||
+                    g_clockMoves.load(std::memory_order_relaxed) < 3)
+                    continue; // menu, loading, paused, or sun sync off
+
+                const float hour = g_sunClockHour.load(std::memory_order_relaxed);
+                const auto first = locate::TodCandidates(g_todGlobals, hour, attempts >= 2);
+                std::vector<locate::TodBinding> moving;
+                if (!first.empty())
+                {
+                    Sleep(4000);
+                    moving = locate::StillMoving(first, g_sunClockHour.load(std::memory_order_relaxed));
+                }
+
+                // Prefer the known offsets; a searched answer must be unique.
+                const locate::TodBinding* pick = nullptr;
+                size_t known = 0;
+                for (const auto& b : moving) if (!b.searched) { ++known; pick = &b; }
+                if (known != 1) pick = (known == 0 && moving.size() == 1) ? &moving[0] : nullptr;
+
+                if (pick)
+                {
+                    g_tod = *pick;
+                    g_todReady.store(true, std::memory_order_release);
+                    const mem::Module& mod = mem::GameModule();
+                    if (g_tod.searched)
+                        LOG("Sun found by search (exe+0x%llX, manager at engine+0x%llX, time of day at "
+                            "+0x%llX); the known offsets no longer match.",
+                            static_cast<unsigned long long>(g_tod.global - mod.base),
+                            static_cast<unsigned long long>(g_tod.managerOff),
+                            static_cast<unsigned long long>(g_tod.hourOff));
+                    else
+                        LOG("Sun found (exe+0x%llX): its time of day agrees with the clock and is moving.",
+                            static_cast<unsigned long long>(g_tod.global - mod.base));
+                    break;
+                }
+                if (moving.size() > 1 && !reportedAmbiguous)
+                {
+                    reportedAmbiguous = true;
+                    LOG("Sun: %zu places look like the time of day; not guessing.", moving.size());
+                }
+                if (++attempts == kDiagnoseAfter)
+                {
+                    LOG("WARNING: could not find the sun's time of day (or another mod is controlling "
+                        "it). The clock still slows down; the sky keeps vanilla speed. Still looking "
+                        "every 30 s.");
+                    locate::LogTodDiagnostics(g_todGlobals, hour);
+                }
+            }
+            FreeLibraryAndExitThread(self, 0);
         }
 
         // The game is packed: its code may not be readable the instant we are
@@ -550,6 +593,7 @@ namespace longerdays
         else
             LOG("Time-of-day engine: %zu candidate(s); the right one is picked in-world.",
                 g_todGlobals.size());
+        const bool findSun = !g_todGlobals.empty();
 
         if (MH_Initialize() != MH_OK)
         {
@@ -567,6 +611,10 @@ namespace longerdays
         }
         g_tickTarget = target;
         LOG("Ready.");
+
+        if (findSun)
+            if (HANDLE t = CreateThread(nullptr, 0, SunFinderThread, nullptr, 0, nullptr))
+                CloseHandle(t);
     }
 
     void Shutdown()
@@ -578,7 +626,7 @@ namespace longerdays
         MH_Uninitialize();
 
         while (g_tickBusy.test_and_set(std::memory_order_acquire)) Sleep(1);
-        ReleaseSun(locate::TodManager(g_tod));
+        if (g_todReady.load()) ReleaseSun(locate::TodManager(g_tod));
         g_tickBusy.clear(std::memory_order_release);
         LOG("Unloaded.");
         log::Close();

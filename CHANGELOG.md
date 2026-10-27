@@ -15,6 +15,12 @@
   the hook sees values that aren't frame times. The mod also falls back
   automatically when the clock stops moving or the sky doesn't follow.
 - The log names the game build and which signature matched each target.
+- Fixed periodic stutter: the sun search now runs on a background thread,
+  reads memory in blocks and only starts once you're in the world.
+- Sun finding for 2.03.02: every static-init store is now a candidate. A
+  candidate is used only if its time of day agrees with the clock and keeps
+  moving like a sun a few seconds later. If none qualifies, the log gets a
+  diagnostic block.
 
 ## 0.2.0
 

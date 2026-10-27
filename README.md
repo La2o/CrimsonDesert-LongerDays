@@ -150,10 +150,13 @@ the feature and wildcard what a recompile tends to shuffle:
   but not the body one.
 - **Field clock:** the realm-select read, with and without the TLS slot and
   branch lengths.
-- **Sun:** every match of the engine-init store is a candidate. In-world, the
-  mod picks the one whose time of day agrees with the field clock. If the
-  known struct offsets stop agreeing, it searches the engine and manager
-  objects for the one place that does. That answer must be unique.
+- **Sun:** every static-init store of a global is a candidate, with the exact
+  2.03.00 shape tried first. A background thread waits until you're in the
+  world. It then keeps the candidates whose time of day agrees with the field
+  clock and, 4 seconds later, has moved forward like a running sun while its
+  limits stayed put. The known struct offsets are tried first; if they stop
+  matching, the engine and manager objects are searched, and a searched
+  answer must be unique. Nothing is written until a candidate passes.
 
 **Runtime self-checks** ([`src/longer_days.cpp`](src/longer_days.cpp)):
 

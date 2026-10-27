@@ -91,14 +91,23 @@ namespace longerdays::offsets
     //
     // engineGlobal is the RIP target of the one-time init store
     //   cmp cs:<guard>, -1 ; jnz ; mov cs:<engineGlobal>, rbx ; mov cs:<..>, rdi
-    // That shape is MSVC's thread-safe static init and may occur more than
-    // once, so every hit is kept as a candidate and the live game picks the
-    // one whose sun agrees with the field clock.
-    inline constexpr const char* kSig_TodEngineGlobal =
-        "83 3D ?? ?? ?? ?? FF 75 ?? 48 89 1D ?? ?? ?? ?? 48 89 3D";
-    inline constexpr uintptr_t kOff_TodEngineGlobal_Mov = 9;
-    inline constexpr int       kLen_TodEngineGlobal_Mov = 7;
-    inline constexpr int       kMaxTodCandidates        = 16;
+    // That shape is MSVC's thread-safe static init and occurs hundreds of
+    // times, and 2.03.02 no longer matches the exact 2.03.00 bytes. So every
+    // such store is a candidate (exact shape first), and the live game picks
+    // the one whose sun agrees with - and moves like - the field clock.
+    struct TodGlobalSig
+    {
+        const char* pattern;
+        int         movOffset; // where the `mov cs:<global>, reg` starts in the match
+    };
+    inline constexpr TodGlobalSig kSig_TodEngineGlobal[] = {
+        {"83 3D ?? ?? ?? ?? FF 75 ?? 48 89 1D ?? ?? ?? ?? 48 89 3D", 9}, // exact, 2.03.00
+        {"83 3D ?? ?? ?? ?? FF 75 ??", 9},                               // short jnz, any store
+        {"83 3D ?? ?? ?? ?? FF 0F 85 ?? ?? ?? ??", 13},                  // long jnz, any store
+    };
+    inline constexpr int kLen_TodEngineGlobal_Mov = 7; // REX + 89 + ModRM + disp32
+    inline constexpr int kMaxTodCandidates        = 4096;
+    inline constexpr int kMaxTodSearchGlobals     = 256; // deep search is costlier
 
     // Known field offsets (2.03.00), tried first. If they stop making sense
     // after an update, the manager is searched for them (see locate.cpp).
