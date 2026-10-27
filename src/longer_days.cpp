@@ -418,18 +418,20 @@ namespace longerdays
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                                reinterpret_cast<LPCWSTR>(&SunFinderThread), &self);
 
-            constexpr int kDiagnoseAfter = 10; // in-world attempts (~1 minute)
+            constexpr int kDiagnoseAfter = 3;  // in-world attempts before the diagnostic block
+            constexpr int kGiveUpAfter   = 10; // ~1 minute, then retry every 30 s
             int attempts = 0;
             bool reportedAmbiguous = false;
             for (;;)
             {
-                Sleep(attempts >= kDiagnoseAfter ? 30000 : 2000);
+                Sleep(attempts >= kGiveUpAfter ? 30000 : 2000);
                 if (g_safeMode.load()) break;
                 if (!g_sunWanted.load(std::memory_order_relaxed) ||
                     g_clockMoves.load(std::memory_order_relaxed) < 3)
                     continue; // menu, loading, paused, or sun sync off
 
                 const float hour = g_sunClockHour.load(std::memory_order_relaxed);
+                if (attempts == 0) LOG("Sun search started (in-world, clock at %.2f).", hour);
                 const auto first = locate::TodCandidates(g_todGlobals, g_todLayout, hour, attempts >= 2);
                 std::vector<locate::TodBinding> moving;
                 if (!first.empty())
@@ -468,13 +470,17 @@ namespace longerdays
                     reportedAmbiguous = true;
                     LOG("Sun: %zu places look like the time of day; not guessing.", moving.size());
                 }
-                if (++attempts == kDiagnoseAfter)
+                ++attempts;
+                if (attempts == kDiagnoseAfter)
                 {
+                    LOG("Sun not found yet (%zu agreed with the clock, %zu kept moving).",
+                        first.size(), moving.size());
+                    locate::LogTodDiagnostics(g_todGlobals, g_todLayout, hour);
+                }
+                if (attempts == kGiveUpAfter)
                     LOG("WARNING: could not find the sun's time of day (or another mod is controlling "
                         "it). The clock still slows down; the sky keeps vanilla speed. Still looking "
                         "every 30 s.");
-                    locate::LogTodDiagnostics(g_todGlobals, g_todLayout, hour);
-                }
             }
             FreeLibraryAndExitThread(self, 0);
         }
