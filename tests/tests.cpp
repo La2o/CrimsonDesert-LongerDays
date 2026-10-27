@@ -2,11 +2,14 @@
 // with -DLONGERDAYS_TESTS=ON and run longerdays_tests (exit code = failures).
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 #include "../src/pattern.h"
 #include "../src/rate_meter.h"
 #include "../src/schedule.h"
+#include "../src/sigtools.h"
+#include "../src/offsets.h"
 
 using namespace longerdays;
 
@@ -168,6 +171,67 @@ static void TestPattern()
     CHECK(!BytePattern::Parse("ZZ 00"));  // malformed
 }
 
+// The field-time tick as shipped in game build 1.0.0.2976 (2.03.02+), copied
+// from CrimsonDesert.exe: the tail of the previous function, its int3
+// padding, then the tick. This build saves r12 in the prologue, which is what
+// broke the 2.03.00 signature.
+static const uint8_t kTick2976[] = {
+    0x74, 0x24, 0x68, 0x48, 0x83, 0xC4, 0x20, 0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5F,
+    0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18,
+    0x4C, 0x89, 0x64, 0x24, 0x20, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83,
+    0xEC, 0x70, 0x48, 0x8B, 0xF9, 0xC5, 0xF2, 0x58, 0x41, 0x2C, 0xC5, 0xFA, 0x11, 0x41, 0x2C,
+    0x80, 0x79, 0x28, 0x00, 0x0F, 0x84, 0xF0, 0x02, 0x00, 0x00, 0x80, 0x79, 0x2B, 0x00, 0x0F,
+    0x85, 0xE6, 0x02, 0x00, 0x00, 0x48, 0x8B};
+constexpr size_t kTick2976Start = 29; // first byte of the tick function
+
+static void TestTickSignatures()
+{
+    using mem::BytePattern;
+    // Place the bytes so the function start lands on a 16-byte boundary, as
+    // it does in the game.
+    alignas(16) uint8_t buf[160] = {};
+    const size_t shift = 32 - kTick2976Start;
+    std::memcpy(buf + shift, kTick2976, sizeof(kTick2976));
+    const uint8_t* b = buf;
+    const uint8_t* e = buf + sizeof(buf);
+    const uint8_t* start = buf + shift + kTick2976Start;
+
+    // The old exact signature no longer matches this build...
+    auto exact = BytePattern::Parse(offsets::kSig_FieldTimeTick_Exact);
+    CHECK(exact && exact->Find(b, e) == nullptr);
+
+    // ...the body signature does, and walking back finds the real start.
+    auto body = BytePattern::Parse(offsets::kSig_FieldTimeTick_Body);
+    const uint8_t* hit = body ? body->Find(b, e) : nullptr;
+    CHECK(hit != nullptr);
+    CHECK(hit && mem::FunctionStartBefore(hit, b, offsets::kMaxPrologueBytes) == start);
+
+    // The loose signature matches too, with the add and store at one offset.
+    auto loose = BytePattern::Parse(offsets::kSig_FieldTimeTick_Loose);
+    const uint8_t* lh = loose ? loose->Find(b, e) : nullptr;
+    CHECK(lh != nullptr);
+    CHECK(lh && lh[offsets::kOff_Loose_AddDisp] == lh[offsets::kOff_Loose_StoreDisp]);
+    CHECK(lh && mem::FunctionStartBefore(lh, b, offsets::kMaxPrologueBytes) == start);
+
+    // Not found when the padding is further back than allowed.
+    CHECK(hit && mem::FunctionStartBefore(hit, b, 8) == nullptr);
+}
+
+static void TestSigTools()
+{
+    const uint8_t span[] = {0xC5, 0xFC, 0x10, 0x05, 1, 2, 3, 4, 0xEB, 0x08, 0xC5, 0xFC, 0x10, 0x05};
+    const uint8_t vmovups[] = {0xC5, 0xFC, 0x10, 0x05};
+    CHECK(mem::FindInSpan(span, sizeof(span), vmovups, 4, 0) == 0);
+    CHECK(mem::FindInSpan(span, sizeof(span), vmovups, 4, 1) == 10);
+    CHECK(mem::FindInSpan(span, sizeof(span), vmovups, 4, 2) == -1);
+
+    CHECK(Near(mem::HourDistance(23.5f, 0.5f), 1.0f));
+    CHECK(Near(mem::HourDistance(0.5f, 23.5f), 1.0f));
+    CHECK(Near(mem::HourDistance(6.0f, 18.0f), 12.0f));
+    CHECK(Near(mem::HourDistance(12.25f, 12.0f), 0.25f));
+}
+
 int main()
 {
     TestDayNight();
@@ -178,6 +242,8 @@ int main()
     TestSeasons();
     TestRateMeter();
     TestPattern();
+    TestTickSignatures();
+    TestSigTools();
     std::printf(g_failures ? "%d failure(s)\n" : "all tests passed\n", g_failures);
     return g_failures;
 }

@@ -41,11 +41,12 @@ add_library(CrimsonDesertLongerDays SHARED
     src/rate_meter.cpp
     src/config.cpp
     src/scanner.cpp
+    src/locate.cpp
     src/log.cpp
     src/toast.cpp
     src/version.rc
 )
-target_link_libraries(CrimsonDesertLongerDays PRIVATE minhook user32 gdi32)
+target_link_libraries(CrimsonDesertLongerDays PRIVATE minhook user32 gdi32 version)
 target_compile_definitions(CrimsonDesertLongerDays PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
 if(MINGW)

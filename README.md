@@ -21,6 +21,12 @@ whole clock, it shapes the day:
   which one is active (borderless or windowed mode).
 - **Hourly log.** The log shows how much time is slowed each in-game hour and
   why.
+- **Built to survive game updates.** Each piece of game code is found by
+  several signatures, from exact to loose, and every match is checked before
+  it's used. The mod then keeps checking itself while you play. If anything
+  stops making sense after a patch, it drops back to vanilla speed and tells
+  you on screen, instead of misbehaving. See
+  [Game updates](#game-updates).
 
 Only the clock slows down. Combat, physics, AI and animation run at normal
 speed.
@@ -30,10 +36,30 @@ are in [`nexus/`](nexus/PUBLISHING.md).
 
 ![How fast time passes, hour by hour](nexus/images/time-of-day-curve.png)
 
-> **Status: untested in-game (v0.2.0).** The game logic is unit-tested, but the
-> hook has not been run in the game yet. It uses signatures that were confirmed
-> in game build **2.03.00**. If your build differs, the log says so. Single-player
-> only.
+> **Status: untested in-game.** The game logic is unit-tested, but the hook has
+> not been run in the game yet. The signatures come from game build **2.03.00**,
+> and the clock-tick lookup has also been tested against the bytes of build
+> **1.0.0.2976** (2.03.02+). The log names your build and which signature
+> matched. Single-player only.
+
+## How it compares
+
+Other Crimson Desert mods also touch the clock. Longer Days is the one built
+around *shaping* the day rather than setting one speed:
+
+| | Longer Days | [Timescale](https://www.nexusmods.com/crimsondesert/mods/3399) | [Crimson Weather](https://www.nexusmods.com/crimsondesert/mods/632) | [DesertLink Time & Weather](https://www.nexusmods.com/crimsondesert/mods/3557) |
+| --- | --- | --- | --- | --- |
+| Focus | How the day *feels* | One day length + fast-forward | Full weather/sky suite | Menu: set, freeze, fast-forward |
+| Separate day / night speed | ✓ | – | ✓ | – |
+| Smooth dawn/dusk blend | ✓ | – | – | – |
+| Longer golden hours | ✓ | – | – | – |
+| Seasonal day length | ✓ | – | – | – |
+| Targets in real time, self-measured | ✓ (minutes) | real hours per day | – | – |
+| Live INI reload | automatic on save | F10 | in-menu | in-menu |
+| Requirements | ASI loader | ASI loader | ReShade (add-on) | DesertLink |
+
+(Based on each mod's Nexus page, October 2026.) Don't run two of them that
+change the clock speed at once.
 
 ## Install
 
@@ -107,16 +133,59 @@ game loads. There are no fixed addresses. The scanner
 ([`src/pattern.h`](src/pattern.h)) finds each signature's longest fixed run with
 Boyer-Moore-Horspool, then checks the wildcards only where that run matches.
 
+## Game updates
+
+No hook can promise to survive every patch, but this one is built to keep
+working through the usual ones, and to fail safe when it can't.
+
+**Layered signatures** ([`src/locate.cpp`](src/locate.cpp)). Each target has an
+exact signature, then looser ones that anchor on the instructions that *are*
+the feature and wildcard what a recompile tends to shuffle:
+
+- **Clock tick:** the exact prologue, then the body (`mov rdi, rcx;
+  vaddss xmm0, xmm1, [rcx+2Ch]; vmovss [rcx+2Ch], xmm0`) with the function
+  start found from the unwind table or the alignment padding, then the same
+  add/store pair at any offset. Body matches must be unique. Patch 2.03.02
+  added one saved register to this prologue, which broke the exact signature
+  but not the body one.
+- **Field clock:** the realm-select read, with and without the TLS slot and
+  branch lengths.
+- **Sun:** every match of the engine-init store is a candidate. In-world, the
+  mod picks the one whose time of day agrees with the field clock. If the
+  known struct offsets stop agreeing, it searches the engine and manager
+  objects for the one place that does. That answer must be unique.
+
+**Runtime self-checks** ([`src/longer_days.cpp`](src/longer_days.cpp)):
+
+- The hook checks that it receives real frame times. If most of them aren't,
+  it enters **safe mode**: the hook stays in but changes nothing, and a
+  warning appears on screen.
+- The clock must advance while time is applied. If it stops, the mod falls
+  back to the plain day multiplier until it moves again.
+- After pinning the sun, the sky must follow within 5 seconds, or sun sync is
+  released for the session.
+- A measured clock speed that can't be right is ignored.
+
+**On-screen notice.** If no signature finds the clock tick at all, nothing is
+hooked, and a toast says the update isn't supported yet.
+
+The log names the game build and which signature matched each target, so a
+report from a new patch contains what's needed to update
+[`src/offsets.h`](src/offsets.h).
+
 ## Troubleshooting
 
 Check `bin64\CrimsonDesertLongerDays.log`:
 
 - **No log:** the ASI loader isn't loading the mod. Check the loader DLL and
   that both files are in `bin64`.
-- **`field-time tick signature NOT FOUND`:** a game update changed the code, and
-  the signatures in `src/offsets.h` need updating.
-- **`time-of-day engine signature NOT FOUND`:** the clock still slows down, but
-  the sky moves at vanilla speed.
+- **`field-time tick was NOT FOUND`** or **`SAFE MODE`:** a game update changed
+  the code beyond what the fallbacks cover. The game runs as vanilla. The
+  signatures in `src/offsets.h` need updating; please send the log.
+- **`could not find the sun`** or **`the sun did not follow`:** the clock still
+  slows down, but the sky moves at vanilla speed. Another mod that controls
+  the sun's time of day (for example a visual time override) can also cause
+  this.
 - **Conflicts:** don't use it with other mods that change day/night speed or
   freeze time of day, such as Timescale or trainer "freeze time" options. They
   change the same values.

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 
 namespace longerdays::toast
 {
@@ -11,6 +12,7 @@ namespace longerdays::toast
         constexpr UINT_PTR  kTimerId  = 1;
         constexpr ULONGLONG kFadeInMs = 120;
         constexpr ULONGLONG kHoldMs   = 1500; // fully visible, after the fade-in
+        constexpr ULONGLONG kWarningHoldMs = 6000;
         constexpr ULONGLONG kFadeOutMs = 400;
         constexpr BYTE      kMaxAlpha = 230;
 
@@ -18,11 +20,13 @@ namespace longerdays::toast
         constexpr COLORREF kTitleColor = RGB(235, 230, 220);
         constexpr COLORREF kOnColor    = RGB(255, 186, 84);  // warm sunlight
         constexpr COLORREF kOffColor   = RGB(160, 160, 160);
+        constexpr COLORREF kWarnColor  = RGB(255, 110, 90);
 
-        // Written by Show (game thread), read by the toast thread.
-        std::mutex g_lock;
-        HWND       g_over    = nullptr;
-        bool       g_enabled = true;
+        // Written by Show (any thread), read by the toast thread.
+        std::mutex   g_lock;
+        HWND         g_over = nullptr;
+        std::wstring g_state;
+        Tone         g_tone = Tone::On;
 
         std::atomic<bool> g_started{false};
         std::atomic<HWND> g_wnd{nullptr};
@@ -31,10 +35,16 @@ namespace longerdays::toast
         ULONGLONG g_shownAt = 0;
         HFONT     g_font    = nullptr;
         int       g_fontPx  = 0;
-        bool      g_shownEnabled = true;
+        std::wstring g_shownState;
+        Tone      g_shownTone = Tone::On;
+        ULONGLONG g_holdMs    = kHoldMs;
 
         const wchar_t* kTitle = L"Longer Days";
-        const wchar_t* StateText(bool on) { return on ? L"ON" : L"OFF (vanilla time)"; }
+
+        COLORREF StateColor(Tone t)
+        {
+            return t == Tone::On ? kOnColor : t == Tone::Off ? kOffColor : kWarnColor;
+        }
 
         HFONT FontFor(int px)
         {
@@ -86,8 +96,10 @@ namespace longerdays::toast
             {
                 std::lock_guard<std::mutex> lk(g_lock);
                 over = g_over;
-                g_shownEnabled = g_enabled;
+                g_shownState = g_state;
+                g_shownTone  = g_tone;
             }
+            g_holdMs = g_shownTone == Tone::Warning ? kWarningHoldMs : kHoldMs;
 
             const RECT target = TargetRect(over);
             const int  px = FontPxFor(target);
@@ -96,7 +108,7 @@ namespace longerdays::toast
             HGDIOBJ old = SelectObject(dc, FontFor(px));
             const SIZE title = Measure(dc, kTitle);
             const SIZE gap   = Measure(dc, L"  ");
-            const SIZE state = Measure(dc, StateText(g_shownEnabled));
+            const SIZE state = Measure(dc, g_shownState.c_str());
             SelectObject(dc, old);
             ReleaseDC(wnd, dc);
 
@@ -121,9 +133,9 @@ namespace longerdays::toast
             const ULONGLONG t = GetTickCount64() - g_shownAt;
             double a;
             if (t < kFadeInMs)                       a = double(t) / kFadeInMs;
-            else if (t < kFadeInMs + kHoldMs)        a = 1.0;
-            else if (t < kFadeInMs + kHoldMs + kFadeOutMs)
-                a = 1.0 - double(t - kFadeInMs - kHoldMs) / kFadeOutMs;
+            else if (t < kFadeInMs + g_holdMs)       a = 1.0;
+            else if (t < kFadeInMs + g_holdMs + kFadeOutMs)
+                a = 1.0 - double(t - kFadeInMs - g_holdMs) / kFadeOutMs;
             else
             {
                 KillTimer(wnd, kTimerId);
@@ -154,8 +166,8 @@ namespace longerdays::toast
             SetTextColor(dc, kTitleColor);
             DrawTextW(dc, kTitle, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             r.left += title.cx + gap.cx;
-            SetTextColor(dc, g_shownEnabled ? kOnColor : kOffColor);
-            DrawTextW(dc, StateText(g_shownEnabled), -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SetTextColor(dc, StateColor(g_shownTone));
+            DrawTextW(dc, g_shownState.c_str(), -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
             SelectObject(dc, old);
             EndPaint(wnd, &ps);
@@ -210,12 +222,13 @@ namespace longerdays::toast
         }
     }
 
-    void Show(HWND over, bool enabled)
+    void Show(HWND over, const wchar_t* state, Tone tone)
     {
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            g_over = over;
-            g_enabled = enabled;
+            g_over  = over;
+            g_state = state;
+            g_tone  = tone;
         }
         // The window gets its own thread with a message loop: the game thread
         // that calls us does not pump messages for our window.

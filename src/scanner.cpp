@@ -93,6 +93,11 @@ namespace longerdays::mem
         return hits.empty() ? 0 : hits.front();
     }
 
+    std::vector<uintptr_t> FindAll(std::string_view pattern, size_t maxCount)
+    {
+        return Scan(pattern, maxCount);
+    }
+
     size_t CountMatches(std::string_view pattern, size_t maxCount)
     {
         return Scan(pattern, maxCount).size();
@@ -102,6 +107,13 @@ namespace longerdays::mem
     {
         MEMORY_BASIC_INFORMATION mbi{};
         if (!Query(addr, mbi) || !(mbi.Protect & kWritable)) return false;
+        return addr + len <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    }
+
+    bool IsReadable(uintptr_t addr, size_t len)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!Query(addr, mbi) || !(mbi.Protect & kReadable)) return false;
         return addr + len <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
     }
 }

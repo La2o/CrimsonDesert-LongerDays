@@ -19,13 +19,17 @@ By default, daytime lasts [b]twice as long[/b] and night stays vanilla. Instead 
 
 Only the [b]clock[/b] slows down. Combat, NPCs, physics, animations and your character run at normal speed. Sleeping and waiting still work.
 
+[size=5][b]How it's different[/b][/size]
+
+Other mods can make the clock run slower or faster. Longer Days [i]shapes[/i] the day instead. It's the only one with smooth dawn and dusk, longer golden hours and seasonal day length, and you can set day and night in real minutes, measured from your own game. It needs no ReShade and no menu: save the INI and changes apply within a second.
+
 [line]
 
 [size=5][b]Requirements[/b][/size]
 
 [list]
 [*][b]Ultimate ASI Loader (x64)[/b] by ThirteenAG: [url=https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases]GitHub releases[/url]. Skip this if your mod manager or another mod already installed an ASI loader.
-[*]Built for game version [b]2.03.00[/b]. See [i]Game updates[/i] below.
+[*]Made for game version [b]2.03.00[/b] and later. See [i]Game updates[/i] below.
 [/list]
 
 [size=5][b]Installation[/b][/size]
@@ -69,7 +73,14 @@ Every setting is explained in [b]CrimsonDesertLongerDays.ini[/b]. Some combinati
 
 [size=5][b]Game updates[/b][/size]
 
-The mod finds the game code it needs each time the game starts, so small patches often don't break it. If a patch does break it, the mod switches itself off, the game runs as vanilla, and the log says [i]signature NOT FOUND[/i]. Please report that in the Posts tab along with your game version.
+Longer Days is built to keep working through patches and to fail safe when it can't:
+[list]
+[*][b]Several signatures per target,[/b] from exact to loose. The loose ones match the few instructions that [i]are[/i] the clock, so recompiles that move code around don't break them. Every match is checked before it's used.
+[*][b]The sun is found live.[/b] In-world, the mod picks the sky value that agrees with the game clock, and searches for it if a patch moved it.
+[*][b]Self-checks while you play.[/b] If the hook sees values that aren't frame times, if the clock stops moving, or if the sky doesn't follow, that part switches itself off.
+[*][b]Safe mode with an on-screen notice.[/b] If something can't be trusted, the game runs at vanilla speed and a short message says so. Your game and saves are never at risk.
+[/list]
+If you see that message after a patch, please post your [b]CrimsonDesertLongerDays.log[/b] in the Posts tab. It names your game build and what matched.
 
 [size=5][b]Troubleshooting[/b][/size]
 

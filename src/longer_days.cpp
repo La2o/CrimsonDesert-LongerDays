@@ -3,17 +3,21 @@
 #include <MinHook.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
 #include <string>
+#include <vector>
 
 #include "config.h"
+#include "locate.h"
 #include "log.h"
 #include "offsets.h"
 #include "rate_meter.h"
 #include "scanner.h"
 #include "schedule.h"
+#include "sigtools.h"
 #include "toast.h"
 #include "version.h"
 
@@ -26,6 +30,11 @@ namespace longerdays
         // Community measurement of the vanilla clock (one real hour = 12
         // in-game hours). Only used until the RateMeter has measured it.
         constexpr float kAssumedVanillaRate = 12.0f;
+
+        // A measured vanilla rate outside this range means we are reading the
+        // wrong thing, not that the game changed its day length that much.
+        constexpr float kMinPlausibleRate = 2.0f;
+        constexpr float kMaxPlausibleRate = 120.0f;
 
         // --- Shared with the clock hook (any game thread) -------------------
         // The multiplier currently in force. AfterTick recomputes it; the hook
@@ -41,6 +50,14 @@ namespace longerdays
         std::atomic<uint32_t> g_meterMisses{0};
         constexpr uint32_t    kAdoptAfterMisses = 600;
 
+        // Self-check of the hook: a real frame step is a small positive number
+        // of seconds. Anything else is passed through untouched and counted.
+        std::atomic<uint32_t> g_tickCalls{0};
+        std::atomic<uint32_t> g_tickOdd{0};
+        std::atomic<bool>     g_safeMode{false}; // hook stays, changes nothing
+        constexpr uint32_t    kTickCheckAfter = 600;
+        constexpr float       kMaxFrameStep   = 2.0f;
+
         // --- Owned by AfterTick (one thread at a time via g_tickBusy) --------
         std::atomic_flag g_tickBusy = ATOMIC_FLAG_INIT;
         std::wstring     g_iniPath;
@@ -52,15 +69,32 @@ namespace longerdays
         FILETIME         g_iniStamp{};
         bool             g_keyWasDown = false;
         int              g_lastLoggedHour = -1;
+        bool             g_tickChecked = false;
+
+        // Clock watchdog: the clock must move while ticks are applied.
+        int64_t   g_lastClockSeconds = -1;
+        double    g_appliedAtClockMove = 0.0;
+        bool      g_clockStale = false;
+        constexpr double kStaleAfterAppliedSeconds = 90.0; // ~18 vanilla game minutes
+
+        // Sun: which candidate/offsets drive it, and whether pinning works.
+        std::vector<uintptr_t> g_todGlobals;
+        locate::TodBinding     g_tod{};
+        ULONGLONG              g_nextTodBind = 0;
+        int                    g_todBindTries = 0;
+        bool                   g_todGaveUp = false;
+        bool                   g_sunBroken = false; // pinning didn't take; off for the session
 
         bool      g_clampApplied = false;
         uintptr_t g_clampMgr     = 0;
         float     g_origLower    = 0.0f;
         float     g_origUpper    = 24.0f;
+        ULONGLONG g_clampSince   = 0;
+        bool      g_clampVerified = false;
+        constexpr ULONGLONG kSunVerifyMs = 5000;
 
         // --- Resolved at load; 0 means that sub-feature is unavailable -------
-        uintptr_t g_clock           = 0; // client-realm {day, hour, min, sec}
-        uintptr_t g_todEngineGlobal = 0;
+        uintptr_t g_clock = 0; // client-realm {day, hour, min, sec}
 
         using FieldTimeTick_t = void (*)(void* mgr, float delta, float unused);
         FieldTimeTick_t g_origTick   = nullptr;
@@ -90,16 +124,23 @@ namespace longerdays
                    c.minute >= 0 && c.minute < 60 && c.second >= 0 && c.second < 60;
         }
 
-        // engine = *global, manager = *(engine + 0x2F8). 0 until in-world.
-        uintptr_t TodManager()
+        HWND GameWindowIfFocused()
         {
-            if (!g_todEngineGlobal) return 0;
-            const uintptr_t engine = *reinterpret_cast<volatile const uintptr_t*>(g_todEngineGlobal);
-            if (engine < kMinPointer || !mem::IsWritable(engine + kOff_Tod_Manager, 8)) return 0;
-            const uintptr_t mgr = *reinterpret_cast<volatile const uintptr_t*>(engine + kOff_Tod_Manager);
-            if (mgr < kMinPointer || !mem::IsWritable(mgr + kOff_Tod_CurrentHour, 12)) return 0;
-            return mgr;
+            DWORD pid = 0;
+            const HWND fg = GetForegroundWindow();
+            GetWindowThreadProcessId(fg, &pid);
+            return pid == GetCurrentProcessId() ? fg : nullptr;
         }
+
+        void Warn(const wchar_t* toastText)
+        {
+            if (g_cfg.showToast)
+                if (const HWND w = GameWindowIfFocused())
+                    toast::Show(w, toastText, toast::Tone::Warning);
+        }
+
+        uintptr_t LowerLimit(uintptr_t mgr) { return mgr + g_tod.hourOff + 4; }
+        uintptr_t UpperLimit(uintptr_t mgr) { return mgr + g_tod.hourOff + 8; }
 
         void ReleaseSun(uintptr_t mgr)
         {
@@ -107,33 +148,142 @@ namespace longerdays
             // means the old was torn down and the new has its own limits.
             if (g_clampApplied && mgr && mgr == g_clampMgr)
             {
-                WriteF32(mgr + kOff_Tod_LowerLimit, g_origLower);
-                WriteF32(mgr + kOff_Tod_UpperLimit, g_origUpper);
+                WriteF32(LowerLimit(mgr), g_origLower);
+                WriteF32(UpperLimit(mgr), g_origUpper);
             }
             g_clampApplied = false;
             g_clampMgr = 0;
         }
 
+        // Find which TimeOfDay manager (and where in it) the sun lives, by
+        // asking which candidate agrees with the field clock. Throttled; gives
+        // up loudly once, then keeps retrying quietly in case a later area
+        // load brings it up.
+        void TryBindTod(float clockHour)
+        {
+            const ULONGLONG now = GetTickCount64();
+            if (now < g_nextTodBind || g_todGlobals.empty()) return;
+            g_nextTodBind = now + (g_todGaveUp ? 10000 : 2000);
+
+            if (locate::BindTod(g_todGlobals, clockHour, g_tod))
+            {
+                if (g_tod.searched)
+                    LOG("Sun found by search: manager at engine+0x%llX, time of day at +0x%llX "
+                        "(the game moved these; the known offsets no longer match).",
+                        static_cast<unsigned long long>(g_tod.managerOff),
+                        static_cast<unsigned long long>(g_tod.hourOff));
+                else
+                    LOG("Sun found (time of day agrees with the clock).");
+                return;
+            }
+            if (!g_todGaveUp && ++g_todBindTries >= 30)
+            {
+                g_todGaveUp = true;
+                LOG("WARNING: could not find the sun's time of day in-world (or another mod is "
+                    "controlling it). The clock still slows down; the sky keeps vanilla speed.");
+            }
+        }
+
         // Pin the visible sun to the field clock: lower == upper == clock hour,
         // which the render manager clamps currentTimeOfDay into every frame.
+        // If the sun doesn't follow within a few seconds, let go for good.
         void SyncSun(bool haveClock, float hour)
         {
-            const uintptr_t mgr = TodManager();
-            if (!g_enabled || !g_cfg.syncSun || !haveClock || !mgr)
+            const bool want = !g_safeMode && g_enabled && g_cfg.syncSun && haveClock && !g_sunBroken;
+            if (want && !g_tod) TryBindTod(hour);
+
+            const uintptr_t mgr = locate::TodManager(g_tod);
+            if (!want || !mgr)
             {
                 if (g_clampApplied) ReleaseSun(mgr);
                 return;
             }
             if (!g_clampApplied || mgr != g_clampMgr)
             {
-                g_origLower    = ReadF32(mgr + kOff_Tod_LowerLimit);
-                g_origUpper    = ReadF32(mgr + kOff_Tod_UpperLimit);
-                g_clampMgr     = mgr;
-                g_clampApplied = true;
+                g_origLower     = ReadF32(LowerLimit(mgr));
+                g_origUpper     = ReadF32(UpperLimit(mgr));
+                g_clampMgr      = mgr;
+                g_clampApplied  = true;
+                g_clampSince    = GetTickCount64();
+                g_clampVerified = false;
                 LOG("Sun sync engaged (limits were %.2f..%.2f).", g_origLower, g_origUpper);
             }
-            WriteF32(mgr + kOff_Tod_LowerLimit, hour);
-            WriteF32(mgr + kOff_Tod_UpperLimit, hour);
+            WriteF32(LowerLimit(mgr), hour);
+            WriteF32(UpperLimit(mgr), hour);
+
+            if (!g_clampVerified)
+            {
+                const float cur = ReadF32(mgr + g_tod.hourOff);
+                if (std::isfinite(cur) && mem::HourDistance(cur, hour) < 0.1f)
+                {
+                    g_clampVerified = true;
+                    LOG("Sun sync verified: the sky follows the slowed clock.");
+                }
+                else if (GetTickCount64() - g_clampSince > kSunVerifyMs)
+                {
+                    ReleaseSun(mgr);
+                    g_sunBroken = true;
+                    LOG("WARNING: the sun did not follow the clock (sky at %.2f, clock at %.2f). "
+                        "Sun sync is off for this session; the clock still slows down.", cur, hour);
+                }
+            }
+        }
+
+        void EnterSafeMode(const char* why)
+        {
+            g_safeMode.store(true);
+            g_length.store(1.0f, std::memory_order_relaxed);
+            ReleaseSun(locate::TodManager(g_tod));
+            LOG("SAFE MODE: %s. Longer Days has stopped changing anything; the game runs at "
+                "vanilla speed. A game update probably changed this code - please report the log.", why);
+            Warn(L"paused: game update not supported yet (see log)");
+        }
+
+        // The hook watches its own inputs: if most "frame steps" are not small
+        // positive seconds, we hooked something we don't understand.
+        void CheckTickSanity()
+        {
+            if (g_tickChecked) return;
+            const uint32_t calls = g_tickCalls.load(std::memory_order_relaxed);
+            if (calls < kTickCheckAfter) return;
+            g_tickChecked = true;
+            const uint32_t odd = g_tickOdd.load(std::memory_order_relaxed);
+            if (odd * 2 > calls)
+                EnterSafeMode("the hooked clock tick receives values that are not frame times");
+            else
+                LOG("Self-check passed: the hooked clock tick receives normal frame times.");
+        }
+
+        // The clock must advance while time is being applied. If it doesn't
+        // (a game update moved it, or another mod froze time), stop steering by
+        // it until it moves again.
+        bool ClockTrustworthy(const Clock& c)
+        {
+            const double applied = g_appliedSeconds.load(std::memory_order_relaxed);
+            const int64_t secs = c.TotalSeconds();
+            if (secs != g_lastClockSeconds)
+            {
+                if (g_clockStale)
+                    LOG("The clock is moving again; dawn/dusk, golden hour and seasons are back on.");
+                g_lastClockSeconds = secs;
+                g_appliedAtClockMove = applied;
+                g_clockStale = false;
+                return true;
+            }
+            if (!g_clockStale && applied - g_appliedAtClockMove > kStaleAfterAppliedSeconds)
+            {
+                g_clockStale = true;
+                LOG("WARNING: the in-game clock has not moved for a while although time is "
+                    "passing (another mod freezing time, or a game update). Using "
+                    "DayLengthMultiplier around the clock until it moves.");
+            }
+            return !g_clockStale;
+        }
+
+        float VanillaRate()
+        {
+            const float r = g_meter.Rate();
+            return r >= kMinPlausibleRate && r <= kMaxPlausibleRate ? r : kAssumedVanillaRate;
         }
 
         void LogConfig(const char* what)
@@ -167,16 +317,21 @@ namespace longerdays
         void PollHotkey()
         {
             if (!g_cfg.toggleKey) return;
-            DWORD pid = 0;
-            const HWND fg = GetForegroundWindow();
-            GetWindowThreadProcessId(fg, &pid);
-            const bool down = pid == GetCurrentProcessId() && (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000);
+            const HWND game = GameWindowIfFocused();
+            const bool down = game && (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000);
             if (down && !g_keyWasDown)
             {
-                g_enabled = !g_enabled;
-                LOG("Hotkey: Longer Days %s.", g_enabled ? "ON" : "OFF (vanilla day length)");
-                MessageBeep(g_enabled ? MB_OK : MB_ICONHAND); // async, never stalls the game
-                if (g_cfg.showToast) toast::Show(fg, g_enabled);
+                if (g_safeMode)
+                {
+                    if (g_cfg.showToast) toast::Show(game, L"paused: game update not supported yet", toast::Tone::Warning);
+                }
+                else
+                {
+                    g_enabled = !g_enabled;
+                    LOG("Hotkey: Longer Days %s.", g_enabled ? "ON" : "OFF (vanilla day length)");
+                    MessageBeep(g_enabled ? MB_OK : MB_ICONHAND); // async, never stalls the game
+                    if (g_cfg.showToast) toast::Show(game, g_enabled);
+                }
             }
             g_keyWasDown = down;
         }
@@ -192,7 +347,7 @@ namespace longerdays
                               : s.dayness <= 0.01f ? "night" : (c.hour < 12 ? "dawn" : "dusk");
             LOG("Day %d %02d:%02d %-11s time x%.2f slower%s | vanilla clock %.1fx real time (%s)",
                 c.day, c.hour, c.minute, phase, g_enabled ? s.length : 1.0f,
-                g_enabled ? "" : " [OFF]", g_meter.Rate(),
+                g_enabled ? "" : " [OFF]", VanillaRate(),
                 g_meter.Calibrated() ? "measured" : "assumed");
         }
 
@@ -203,25 +358,35 @@ namespace longerdays
             if (g_tickBusy.test_and_set(std::memory_order_acquire)) return;
             PollIni();
             PollHotkey();
+            CheckTickSanity();
+            if (g_safeMode)
+            {
+                g_tickBusy.clear(std::memory_order_release);
+                return;
+            }
 
             Clock clock;
-            const bool haveClock = ReadClock(clock);
+            const bool haveClock = ReadClock(clock) && ClockTrustworthy(clock);
             if (haveClock)
             {
                 g_meter.Feed(g_appliedSeconds.load(std::memory_order_relaxed), clock.TotalSeconds());
                 if (g_meter.Calibrated() && !g_reportedCalibration)
                 {
                     g_reportedCalibration = true;
-                    LOG("Measured vanilla clock speed: %.2f in-game seconds per real second "
-                        "(a full vanilla day = %.0f real minutes).",
-                        g_meter.Rate(), 24.0f * 60.0f / g_meter.Rate());
+                    const float r = g_meter.Rate();
+                    if (r >= kMinPlausibleRate && r <= kMaxPlausibleRate)
+                        LOG("Measured vanilla clock speed: %.2f in-game seconds per real second "
+                            "(a full vanilla day = %.0f real minutes).", r, 24.0f * 60.0f / r);
+                    else
+                        LOG("WARNING: measured a vanilla clock speed of %.2f, which can't be right; "
+                            "using the assumed %.0f for real-minute targets.", r, kAssumedVanillaRate);
                 }
             }
 
             float length = 1.0f;
             if (haveClock)
             {
-                const SpeedSample s = LengthAt(g_cfg, clock.Hours(), clock.day, g_meter.Rate());
+                const SpeedSample s = LengthAt(g_cfg, clock.Hours(), clock.day, VanillaRate());
                 if (g_enabled) length = s.length;
                 LogHourly(clock, s);
             }
@@ -238,7 +403,17 @@ namespace longerdays
 
         void HookedFieldTimeTick(void* mgr, float delta, float unused)
         {
-            delta /= g_length.load(std::memory_order_relaxed);
+            g_tickCalls.fetch_add(1, std::memory_order_relaxed);
+            if (!(delta >= 0.0f && delta < kMaxFrameStep)) // also catches NaN
+            {
+                g_tickOdd.fetch_add(1, std::memory_order_relaxed);
+                g_origTick(mgr, delta, unused);
+                AfterTick();
+                return;
+            }
+
+            if (!g_safeMode.load(std::memory_order_relaxed))
+                delta /= g_length.load(std::memory_order_relaxed);
 
             if (mgr == g_meterMgr.load(std::memory_order_relaxed))
             {
@@ -257,21 +432,15 @@ namespace longerdays
             AfterTick();
         }
 
-        uintptr_t ResolveInModule(uintptr_t match, uintptr_t off, int len)
-        {
-            const uintptr_t a = mem::ResolveRipAt(match + off, len);
-            return mem::GameModule().Contains(a) ? a : 0;
-        }
-
         // The game is packed: its code may not be readable the instant we are
-        // loaded. Retry the essential signature for a while before giving up.
-        uintptr_t WaitForPattern(const char* sig, int timeoutMs)
+        // loaded. Retry the essential lookup for a while before giving up.
+        locate::Hit WaitForTick(int timeoutMs)
         {
-            for (int waited = 0;; waited += 500)
+            for (int waited = 0;; waited += 1000)
             {
-                if (const uintptr_t a = mem::FindPattern(sig)) return a;
-                if (waited >= timeoutMs) return 0;
-                Sleep(500);
+                if (const locate::Hit h = locate::FieldTimeTick()) return h;
+                if (waited >= timeoutMs) return {};
+                Sleep(1000);
             }
         }
 
@@ -282,6 +451,46 @@ namespace longerdays
             std::wstring p = buf;
             const size_t dot = p.find_last_of(L'.');
             return (dot == std::wstring::npos ? p : p.substr(0, dot)) + ext;
+        }
+
+        // Which game build this is, so a log from a new patch says so.
+        void LogGameBuild(const wchar_t* exe)
+        {
+            DWORD ignored = 0;
+            const DWORD size = GetFileVersionInfoSizeW(exe, &ignored);
+            std::vector<uint8_t> info(size);
+            VS_FIXEDFILEINFO* ffi = nullptr;
+            UINT len = 0;
+            if (size && GetFileVersionInfoW(exe, 0, size, info.data()) &&
+                VerQueryValueW(info.data(), L"\\", reinterpret_cast<void**>(&ffi), &len) && ffi)
+            {
+                LOG("Game build: %u.%u.%u.%u", HIWORD(ffi->dwFileVersionMS), LOWORD(ffi->dwFileVersionMS),
+                    HIWORD(ffi->dwFileVersionLS), LOWORD(ffi->dwFileVersionLS));
+            }
+            else
+            {
+                LOG("Game build: unknown (no version info).");
+            }
+        }
+
+        // If the mod can't start, say so on screen once the game window is up,
+        // instead of failing silently. Runs on the init thread; never blocks
+        // the game.
+        void ShowStartupFailure()
+        {
+            if (!g_cfg.showToast) return;
+            for (int i = 0; i < 600; ++i) // up to ten minutes
+            {
+                if (HWND w = GameWindowIfFocused())
+                {
+                    Sleep(5000); // let the window settle past the splash
+                    if (const HWND now = GameWindowIfFocused()) w = now;
+                    toast::Show(w, L"not active: game update not supported yet (see log)",
+                                toast::Tone::Warning);
+                    return;
+                }
+                Sleep(1000);
+            }
         }
     }
 
@@ -301,6 +510,7 @@ namespace longerdays
         log::Open(SiblingPath(self, L".log"));
         LOG("Crimson Desert Longer Days v%s", LONGERDAYS_VERSION);
         LOG("Host process: %ls", exe);
+        LogGameBuild(exe);
 
         WIN32_FILE_ATTRIBUTE_DATA fad{};
         if (GetFileAttributesExW(g_iniPath.c_str(), GetFileExInfoStandard, &fad))
@@ -311,34 +521,42 @@ namespace longerdays
         g_enabled = g_cfg.enabled;
         LogConfig("Config");
 
-        const uintptr_t tick = WaitForPattern(kSig_FieldTimeTick, 60000);
+        const locate::Hit tick = WaitForTick(60000);
         if (!tick)
         {
-            LOG("ERROR: field-time tick signature NOT FOUND. This game version is not supported. "
-                "Mod inactive.");
+            LOG("ERROR: the field-time tick was NOT FOUND by any signature. This game version "
+                "is not supported yet. Mod inactive; the game is untouched.");
+            ShowStartupFailure();
             return;
         }
-        if (mem::CountMatches(kSig_FieldTimeTick) != 1)
-            LOG("WARNING: field-time tick signature is ambiguous; hooking the first match.");
+        LOG("Clock tick found via %s at exe+0x%llX.", tick.how,
+            static_cast<unsigned long long>(tick.addr - mem::GameModule().base));
 
-        if (const uintptr_t m = mem::FindPattern(kSig_FieldTimeRealm))
-            g_clock = ResolveInModule(m, kOff_FieldTime_ClientVmovups, kLen_FieldTime_Vmovups);
-        if (!g_clock)
-            LOG("WARNING: field clock signature NOT FOUND - dawn/dusk, golden hour, seasons, "
+        if (const locate::Hit clock = locate::FieldClock())
+        {
+            g_clock = clock.addr;
+            LOG("Field clock found via %s.", clock.how);
+        }
+        else
+        {
+            LOG("WARNING: field clock NOT FOUND - dawn/dusk, golden hour, seasons, "
                 "real-time targets and sun sync are off; DayLengthMultiplier applies around the clock.");
+        }
 
-        if (const uintptr_t m = mem::FindPattern(kSig_TodEngineGlobal))
-            g_todEngineGlobal = ResolveInModule(m, kOff_TodEngineGlobal_Mov, kLen_TodEngineGlobal_Mov);
-        if (!g_todEngineGlobal)
-            LOG("WARNING: time-of-day engine signature NOT FOUND - the sun will keep vanilla speed "
+        g_todGlobals = locate::TodEngineGlobals();
+        if (g_todGlobals.empty())
+            LOG("WARNING: time-of-day engine NOT FOUND - the sun will keep vanilla speed "
                 "while the clock is slowed.");
+        else
+            LOG("Time-of-day engine: %zu candidate(s); the right one is picked in-world.",
+                g_todGlobals.size());
 
         if (MH_Initialize() != MH_OK)
         {
             LOG("ERROR: MinHook failed to initialize. Mod inactive.");
             return;
         }
-        void* target = reinterpret_cast<void*>(tick);
+        void* target = reinterpret_cast<void*>(tick.addr);
         if (MH_CreateHook(target, reinterpret_cast<void*>(&HookedFieldTimeTick),
                           reinterpret_cast<void**>(&g_origTick)) != MH_OK ||
             MH_EnableHook(target) != MH_OK)
@@ -348,8 +566,7 @@ namespace longerdays
             return;
         }
         g_tickTarget = target;
-        LOG("Ready. Clock tick hooked at exe+0x%llX.",
-            static_cast<unsigned long long>(tick - mem::GameModule().base));
+        LOG("Ready.");
     }
 
     void Shutdown()
@@ -361,7 +578,7 @@ namespace longerdays
         MH_Uninitialize();
 
         while (g_tickBusy.test_and_set(std::memory_order_acquire)) Sleep(1);
-        ReleaseSun(TodManager());
+        ReleaseSun(locate::TodManager(g_tod));
         g_tickBusy.clear(std::memory_order_release);
         LOG("Unloaded.");
         log::Close();

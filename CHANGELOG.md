@@ -6,6 +6,15 @@
   screen (borderless and windowed mode). Turn it off with `ShowToast=0`.
 - The mod no longer loads into the game's crash reporter
   (`crashpad_handler.exe`), which was overwriting the log.
+- Works with game build 1.0.0.2976 (2.03.02+), whose clock-tick prologue
+  broke the 2.03.00 signature.
+- Update resilience: each target now has several signatures, from exact to
+  loose, and every match is checked before use. The sun's time of day is
+  matched live against the game clock, and searched for if a patch moved it.
+- Runtime self-checks: safe mode (vanilla speed plus an on-screen notice) if
+  the hook sees values that aren't frame times. The mod also falls back
+  automatically when the clock stops moving or the sky doesn't follow.
+- The log names the game build and which signature matched each target.
 
 ## 0.2.0
 
