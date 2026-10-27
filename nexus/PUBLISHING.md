@@ -7,6 +7,7 @@ Everything for the mod page is in this folder:
 | `summary.txt` | **Brief overview** (≤ 350 characters) |
 | `description.bbcode` | **Detailed description**. Switch the editor to BBCode mode and paste it in. |
 | `images/time-of-day-curve.png` | **Images**: an explanatory chart. Use it as a secondary image. |
+| `images/comparison.png` | **Images**: the README's comparison table as a picture. |
 | `../CHANGELOG.md` | The **Changelog** tab for each version |
 
 ## 1. Test in-game before the first upload
