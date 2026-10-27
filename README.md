@@ -189,7 +189,7 @@ report from a new patch contains what's needed to update
 
 ## Compatibility
 
-- **Seasons of Pywel:** works alongside it, not yet tested together in-game.
+- **Seasons of Pywel:** works alongside it (tested with 1.0.4).
   [Seasons of Pywel](https://www.nexusmods.com/crimsondesert/mods/3630) reads
   the game's clock to pick the season and roll its weather; Longer Days only
   changes how fast that clock runs, and the time stays a normal game time.
@@ -200,8 +200,15 @@ report from a new patch contains what's needed to update
   - Longer Days' own `[Seasons]` day length (`Strength` above 0) follows
     Seasons of Pywel's calendar on its own: with `SeasonLengthDays=0` (the
     default) it reads the season length picked in that mod's F5 menu (3, 7,
-    14, 30, 45, 60 or 90 days) from `bin64\Seasons\Seasons.ini`, and a season locked
-    there ("Fixed") holds its day length. Menu changes apply within a second.
+    14, 30, 45, 60 or 90 days) from `bin64\Seasons\Seasons.ini`, and a season
+    locked there ("Fixed") holds its day length. Menu changes apply within a
+    second.
+- **Crimson Weather:** works alongside it for weather, clouds and wind, not yet
+  tested together in-game. Leave
+  [Crimson Weather](https://www.nexusmods.com/crimsondesert/mods/632)'s Time
+  control off: its time override, Real In-Game Time mode and Day/Night Time
+  Scale sliders change the same clock and sun as Longer Days, and the two would
+  fight. Use one mod for time.
 - **Not compatible:** other mods that change day/night speed or freeze time of
   day, such as Timescale or trainer "freeze time" options. They change the
   same values. Use only one.

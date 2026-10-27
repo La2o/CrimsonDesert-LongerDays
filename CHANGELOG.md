@@ -8,6 +8,7 @@
   menu changes apply within a second. Set `SeasonLengthDays` to 1–365 to choose
   your own. It replaces `YearLengthDays` and `SummerPeakDay`.
   Tested in-game with Seasons of Pywel 1.0.4.
+- Docs: compatibility notes for Crimson Weather (leave its Time control off).
 - No more false "could not find the sun" warning after a minute in the main
   menu: the warning waits until a save has loaded.
 - Docs: a Compatibility section in the README, with notes for running
