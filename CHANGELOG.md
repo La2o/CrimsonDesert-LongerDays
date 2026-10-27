@@ -4,9 +4,12 @@
 
 - `[Seasons]` follows Seasons of Pywel: with the new `SeasonLengthDays=0`
   (default), the season length picked in its F5 menu (3, 7, 14, 30, 45, 60 or
-  90 days) and a season locked there are read from `bin64\Seasons.ini`, and
+  90 days) and a season locked there are read from `bin64\Seasons\Seasons.ini`, and
   menu changes apply within a second. Set `SeasonLengthDays` to 1–365 to choose
   your own. It replaces `YearLengthDays` and `SummerPeakDay`.
+  Tested in-game with Seasons of Pywel 1.0.4.
+- No more false "could not find the sun" warning after a minute in the main
+  menu: the warning waits until a save has loaded.
 - Docs: a Compatibility section in the README, with notes for running
   alongside Seasons of Pywel.
 

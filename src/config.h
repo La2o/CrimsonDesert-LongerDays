@@ -33,7 +33,7 @@ namespace longerdays
         float seasonStrength   = 0.0f;  // 0 = off, 0.3 = summer days +30%, winter -30%
         float seasonLengthDays = 30.0f; // in-game days per season
         int   fixedSeason      = -1;    // -1 = follow the day; 0 summer, 1 autumn, 2 winter, 3 spring
-        bool  seasonsFromPywel = false; // the two above were read from Seasons.ini
+        bool  seasonsFromPywel = false; // the two above were read from Seasons\Seasons.ini
 
         // Reads the INI (Windows only), clamping every value to a safe range.
         // Missing keys keep their defaults. With SeasonLengthDays=0, the

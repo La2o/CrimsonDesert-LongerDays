@@ -200,7 +200,7 @@ report from a new patch contains what's needed to update
   - Longer Days' own `[Seasons]` day length (`Strength` above 0) follows
     Seasons of Pywel's calendar on its own: with `SeasonLengthDays=0` (the
     default) it reads the season length picked in that mod's F5 menu (3, 7,
-    14, 30, 45, 60 or 90 days) from `bin64\Seasons.ini`, and a season locked
+    14, 30, 45, 60 or 90 days) from `bin64\Seasons\Seasons.ini`, and a season locked
     there ("Fixed") holds its day length. Menu changes apply within a second.
 - **Not compatible:** other mods that change day/night speed or freeze time of
   day, such as Timescale or trainer "freeze time" options. They change the

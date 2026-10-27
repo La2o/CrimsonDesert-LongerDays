@@ -535,7 +535,9 @@ namespace longerdays
 
             constexpr int kDiagnoseAfter = 3;  // in-world attempts before the diagnostic block
             constexpr int kGiveUpAfter   = 10; // ~1 minute, then retry every 30 s
+            constexpr int kWarnInMenu    = 20; // ~5 more minutes before any save has loaded
             int attempts = 0;
+            bool saveLoaded = false; // the main menu's sky stands still: no warning there
             bool reportedAmbiguous = false;
             uint32_t epoch = g_reanchorEpoch.load(std::memory_order_relaxed);
             for (;;)
@@ -554,6 +556,7 @@ namespace longerdays
                 if (nowEpoch != epoch)
                 {
                     epoch = nowEpoch;
+                    saveLoaded = true;
                     if (attempts > 0)
                         LOG("Sun search restarted: the game re-anchored the clock (save loaded).");
                     attempts = 0;
@@ -617,7 +620,10 @@ namespace longerdays
                         first.size(), moving.size());
                     locate::LogTodDiagnostics(g_todGlobals, g_todLayout, hour);
                 }
-                if (attempts == kGiveUpAfter)
+                // A save that loaded during this try restarts the search
+                // instead: no warning for the main menu's sky.
+                if (attempts == (saveLoaded ? kGiveUpAfter : kWarnInMenu) &&
+                    g_reanchorEpoch.load(std::memory_order_relaxed) == epoch)
                     LOG("WARNING: could not find the sun's time of day (or another mod is controlling "
                         "it). The clock still slows down; the sky keeps vanilla speed. Still looking "
                         "every 30 s.");
@@ -705,7 +711,7 @@ namespace longerdays
         LOG("Host process: %ls", exe);
         LogGameBuild(exe);
 
-        g_seasonsIniPath = g_iniPath.substr(0, g_iniPath.find_last_of(L'\\') + 1) + L"Seasons.ini";
+        g_seasonsIniPath = g_iniPath.substr(0, g_iniPath.find_last_of(L'\\') + 1) + L"Seasons\\Seasons.ini";
         g_iniStamp = WriteTime(g_iniPath);
         g_seasonsIniStamp = WriteTime(g_seasonsIniPath);
         if (g_iniStamp.dwLowDateTime == 0 && g_iniStamp.dwHighDateTime == 0)
