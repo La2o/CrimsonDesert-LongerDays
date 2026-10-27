@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Docs: a Compatibility section in the README, with notes for running
+  alongside Seasons of Pywel.
+
 ## 0.2.0
 
 First public release. Tested on game build 1.0.0.2976 (2.03.02).

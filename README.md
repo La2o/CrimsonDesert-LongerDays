@@ -185,6 +185,30 @@ The log names the game build and which signature matched each target, so a
 report from a new patch contains what's needed to update
 [`src/offsets.h`](src/offsets.h).
 
+## Compatibility
+
+- **Seasons of Pywel:** works alongside it, not yet tested together in-game.
+  [Seasons of Pywel](https://www.nexusmods.com/crimsondesert/mods/3630) reads
+  the game's clock to pick the season and roll its weather; Longer Days only
+  changes how fast that clock runs, and the time stays a normal game time.
+  Both are ASI plugins: keep only one ASI loader (`winmm.dll`) in `bin64`.
+  - Seasons and their weather spells are counted in game days and hours, so
+    with longer days they also last longer in real time. Pick a shorter season
+    length in the Seasons menu (F5) if they feel too slow.
+  - To match Longer Days' own `[Seasons]` day length to its calendar, set
+    `Strength` above 0. The defaults `YearLengthDays=120` and
+    `SummerPeakDay=15` assume Seasons of Pywel's 30-day seasons, starting with
+    summer. With another season length, set `YearLengthDays` to 4× it and
+    `SummerPeakDay` to half of it.
+- **Not compatible:** other mods that change day/night speed or freeze time of
+  day, such as Timescale or trainer "freeze time" options. They change the
+  same values. Use only one.
+- **Weather and sky mods** that don't change the clock speed, ReShade, and
+  graphics, gameplay and PAZ data mods: work alongside it. A mod that sets the
+  sun's time of day itself can stop the sky from following the slowed clock
+  (see Troubleshooting).
+- Single-player only.
+
 ## Troubleshooting
 
 Check `bin64\CrimsonDesertLongerDays.log`:
@@ -198,9 +222,7 @@ Check `bin64\CrimsonDesertLongerDays.log`:
   slows down, but the sky moves at vanilla speed. Another mod that controls
   the sun's time of day (for example a visual time override) can also cause
   this.
-- **Conflicts:** don't use it with other mods that change day/night speed or
-  freeze time of day, such as Timescale or trainer "freeze time" options. They
-  change the same values.
+- **Conflicts:** see [Compatibility](#compatibility).
 
 ## Building
 
