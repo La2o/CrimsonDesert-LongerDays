@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Pressing F8 briefly shows "Longer Days: ON" or "OFF" near the top of the
+  screen (borderless and windowed mode). Turn it off with `ShowToast=0`.
+- The mod no longer loads into the game's crash reporter
+  (`crashpad_handler.exe`), which was overwriting the log.
+
 ## 0.2.0
 
 First public release.

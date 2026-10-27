@@ -17,7 +17,8 @@ whole clock, it shapes the day:
   *Seasons of Pywel*.
 - **Sky stays in sync.** The sun, moon and sky follow the slowed clock.
 - **Live tuning.** Save the INI in-game and changes apply within a second. F8
-  switches between this mod and vanilla.
+  switches between this mod and vanilla, with a short on-screen note saying
+  which one is active (borderless or windowed mode).
 - **Hourly log.** The log shows how much time is slowed each in-game hour and
   why.
 

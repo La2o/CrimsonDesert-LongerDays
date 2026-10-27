@@ -14,6 +14,7 @@
 #include "rate_meter.h"
 #include "scanner.h"
 #include "schedule.h"
+#include "toast.h"
 #include "version.h"
 
 namespace longerdays
@@ -140,11 +141,11 @@ namespace longerdays
             const Config& c = g_cfg;
             LOG("%s: enabled=%d | day x%.2f night x%.2f, day %.1fh-%.1fh, blend %.1fh | "
                 "golden hour x%.2f over %.1fh | real minutes day=%.0f night=%.0f | "
-                "seasons %.0f%% over %.0f days (peak day %.0f) | syncSun=%d toggleKey=0x%X",
+                "seasons %.0f%% over %.0f days (peak day %.0f) | syncSun=%d toggleKey=0x%X showToast=%d",
                 what, c.enabled, c.dayLength, c.nightLength, c.dayStartHour, c.dayEndHour,
                 c.transitionHours, c.goldenHourMultiplier, c.goldenHourLength, c.dayRealMinutes,
                 c.nightRealMinutes, c.seasonStrength * 100.0f, c.yearLengthDays, c.summerPeakDay,
-                c.syncSun, c.toggleKey);
+                c.syncSun, c.toggleKey, c.showToast);
         }
 
         void PollIni()
@@ -167,13 +168,15 @@ namespace longerdays
         {
             if (!g_cfg.toggleKey) return;
             DWORD pid = 0;
-            GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+            const HWND fg = GetForegroundWindow();
+            GetWindowThreadProcessId(fg, &pid);
             const bool down = pid == GetCurrentProcessId() && (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000);
             if (down && !g_keyWasDown)
             {
                 g_enabled = !g_enabled;
                 LOG("Hotkey: Longer Days %s.", g_enabled ? "ON" : "OFF (vanilla day length)");
                 MessageBeep(g_enabled ? MB_OK : MB_ICONHAND); // async, never stalls the game
+                if (g_cfg.showToast) toast::Show(fg, g_enabled);
             }
             g_keyWasDown = down;
         }

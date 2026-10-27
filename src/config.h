@@ -15,6 +15,7 @@ namespace longerdays
         float transitionHours = 1.0f; // dawn/dusk blend width; 0 = hard switch
         bool  syncSun      = true;
         int   toggleKey    = 0x77; // VK_F8; 0 disables the hotkey
+        bool  showToast    = true; // on-screen ON/OFF note when the hotkey is pressed
 
         // [GoldenHour] - sunrise and sunset linger on top of the day/night speed
         float goldenHourMultiplier = 1.5f; // 1.0 = off

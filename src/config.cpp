@@ -55,6 +55,7 @@ namespace longerdays
         c.syncSun         = ini.Int(kMain, L"SyncSun", c.syncSun) != 0;
         c.toggleKey       = ini.Int(kMain, L"ToggleKey", c.toggleKey);
         if (c.toggleKey < 0 || c.toggleKey > 0xFE) c.toggleKey = 0;
+        c.showToast       = ini.Int(kMain, L"ShowToast", c.showToast) != 0;
 
         constexpr const wchar_t* kGolden = L"GoldenHour";
         c.goldenHourMultiplier = ini.Float(kGolden, L"Multiplier", c.goldenHourMultiplier, 0.25f, 10.0f);
