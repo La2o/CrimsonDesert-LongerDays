@@ -113,8 +113,7 @@ Check `bin64\CrimsonDesertLongerDays.log`:
 - **No log:** the ASI loader isn't loading the mod. Check the loader DLL and
   that both files are in `bin64`.
 - **`field-time tick signature NOT FOUND`:** a game update changed the code, and
-  the signatures in `src/offsets.h` need updating. A second log from the
-  launcher with this error is harmless.
+  the signatures in `src/offsets.h` need updating.
 - **`time-of-day engine signature NOT FOUND`:** the clock still slows down, but
   the sky moves at vanilla speed.
 - **Conflicts:** don't use it with other mods that change day/night speed or

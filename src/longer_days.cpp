@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
 #include <string>
 
 #include "config.h"
@@ -283,12 +284,19 @@ namespace longerdays
 
     void Initialize(HMODULE self)
     {
+        // The ASI loader in bin64 is also picked up by the game's helper
+        // processes (crashpad_handler.exe, ...). Stay out of those entirely:
+        // opening the log there would truncate the game's own log.
+        wchar_t exe[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        const wchar_t* exeName = std::wcsrchr(exe, L'\\');
+        exeName = exeName ? exeName + 1 : exe;
+        if (_wcsicmp(exeName, L"CrimsonDesert.exe") != 0)
+            return;
+
         g_iniPath = SiblingPath(self, L".ini");
         log::Open(SiblingPath(self, L".log"));
         LOG("Crimson Desert Longer Days v%s", LONGERDAYS_VERSION);
-
-        wchar_t exe[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
         LOG("Host process: %ls", exe);
 
         WIN32_FILE_ATTRIBUTE_DATA fad{};
@@ -303,8 +311,8 @@ namespace longerdays
         const uintptr_t tick = WaitForPattern(kSig_FieldTimeTick, 60000);
         if (!tick)
         {
-            LOG("ERROR: field-time tick signature NOT FOUND. This game version is not supported "
-                "(or this is the launcher process, which is harmless). Mod inactive.");
+            LOG("ERROR: field-time tick signature NOT FOUND. This game version is not supported. "
+                "Mod inactive.");
             return;
         }
         if (mem::CountMatches(kSig_FieldTimeTick) != 1)
